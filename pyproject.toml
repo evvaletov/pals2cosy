@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pals2cosy"
+version = "0.1.0"
+description = "Convert PALS v2 lattice files to COSY INFINITY FOX code"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "Eremey Valetov"}]
+dependencies = ["pyyaml"]
+
+[project.scripts]
+pals2cosy = "pals2cosy.cli:main"

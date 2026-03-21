@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pals2cosy"
-version = "0.4.1"
+version = "0.4.2"
 description = "Convert PALS lattice files to COSY INFINITY input code"
 readme = "README.md"
 requires-python = ">=3.9"

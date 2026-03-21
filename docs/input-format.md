@@ -1,156 +1,202 @@
 # Input format
 
-pals2cosy reads PALS v2 lattice files in JSON or YAML format. The file
-extension (`.json`, `.yaml`, `.yml`) determines the parser used.
+pals2cosy reads lattice files in PALS format, auto-detected from the `PALS:`
+root key. A flat `beamline:` format with positioned elements is also accepted.
 
-## Structure
+---
 
-A v2 lattice file has this top-level structure:
+## Official PALS format
 
-```yaml
-beamline:
-  metadata:
-    format_version: 2
-    name: My_Beamline
-    version: '1.0'
-    description: Example beamline
-    reference_energy_mev: 45.0
-    particle_type: electron
-  beam_parameters:
-    particle:
-      type: electron
-      kinetic_energy_mev: 45.0
-      mass_mev: 0.51099895
-      charge_e: -1
-    rf_frequency_hz: 2856000000.0
-  elements:
-    - ...
-  global_settings:
-    quadrupole_gradient_coefficient_t_per_a_per_m: 2.694
-```
+Files with the `PALS:` root key follow the
+[official PALS specification](https://pals-project.readthedocs.io/).
 
-## Element types
-
-### Quadrupole
+### Structure
 
 ```yaml
-- name: Q1
-  type: Quadrupole
-  s_start_m: 0.5
-  s_end_m: 0.589
-  length_m: 0.089
-  polarity: focusing      # or "defocusing"
-  parameters:
-    current_a: 1.5
-  aperture_m: 0.027
+PALS:
+  version: null
+  facility:
+    - element_name:
+        kind: ElementType
+        length: 1.0
+        ...
+    - line_name:
+        kind: BeamLine
+        line:
+          - element_name
+          - other_element:
+              inherit: element_name
+              MagneticMultipoleP:
+                Bn1: -1.0
+    - lattice_name:
+        kind: Lattice
+        branches:
+          - line_name
+    - use: lattice_name
 ```
 
-### Dipole (PALS-native)
+### Quadrupole (Bn1)
 
-Edge angles and Enge coefficients are attributes of the SBend element:
+Quadrupoles use `MagneticMultipoleP.Bn1` — the pole-tip field in Tesla:
 
 ```yaml
-- name: B1
-  type: SBend
-  s_start_m: 1.0
-  s_end_m: 1.037
-  length_m: 0.037389
-  parameters:
-    bending_angle_deg: 11.25
-    dipole_length_m: 0.037389
-    pole_gap_m: 0.0127
-    entrance_edge_angle_deg: 0.0
-    exit_edge_angle_deg: 11.25
-  fringe_fields:
-    enge_coefficients: [56.49, -50.79, 19.32, -3.621, 0.3315, -0.01193]
+- q1:
+    kind: Quadrupole
+    length: 1.0
+    MagneticMultipoleP:
+      Bn1: 1.0    # Tesla; positive = horizontally focusing for positive charge
 ```
 
-### Dipole (FELsim DIPOLE_WEDGE)
+### Sextupole (Bn2)
 
-Edge kicks are separate elements bracketing the main dipole. The converter
-auto-detects consecutive DPW → DPH → DPW patterns and consolidates them:
+Sextupoles use `MagneticMultipoleP.Bn2` — the sextupole pole-tip field in Tesla:
 
 ```yaml
-- name: W1_entrance
-  type: DIPOLE_WEDGE
-  s_start_m: 0.99
-  s_end_m: 1.00
-  length_m: 0.01
-  parameters:
-    wedge_angle_deg: 0.0
-    dipole_angle_deg: 11.25
-    dipole_length_m: 0.037389
-    pole_gap_m: 0.0127
-  fringe_fields:
-    enge_coefficients: [56.49, -50.79, 19.32, -3.621, 0.3315, -0.01193]
-
-- name: B1
-  type: SBend
-  s_start_m: 1.00
-  s_end_m: 1.037
-  length_m: 0.037389
-  parameters:
-    bending_angle_deg: 11.25
-    dipole_length_m: 0.037389
-    pole_gap_m: 0.0127
-
-- name: W1_exit
-  type: DIPOLE_WEDGE
-  s_start_m: 1.037
-  s_end_m: 1.047
-  length_m: 0.01
-  parameters:
-    wedge_angle_deg: 11.25
-    dipole_angle_deg: 11.25
-    dipole_length_m: 0.037389
-    pole_gap_m: 0.0127
+- s1:
+    kind: Sextupole
+    length: 0.2
+    MagneticMultipoleP:
+      Bn2: 0.5    # Tesla
 ```
 
-Both representations produce identical FOX output.
+### Solenoid (Bz)
 
-### Undulator / Wiggler
-
-Treated as a drift of the same length:
+Solenoids use `SolenoidP.Bz` — the on-axis field in Tesla:
 
 ```yaml
-- name: U1
-  type: Wiggler
-  s_start_m: 12.0
-  s_end_m: 12.54
-  length_m: 0.54
-  parameters: {}
+- sol1:
+    kind: Solenoid
+    length: 0.5
+    SolenoidP:
+      Bz: 1.5    # Tesla (on-axis field)
 ```
 
-### Diagnostics and correctors
+### RF Cavity
 
-Zero-length elements (BPM, OTR, correctors, spectrometers) are skipped in the
-FOX output. The drift space around them is preserved.
+RF cavities use `RFCavityP` with voltage, frequency, and phase:
 
 ```yaml
-- name: BPM1
-  type: BPM
-  s_start_m: 2.457
-  s_end_m: 2.457
-  length_m: 0.0
-  parameters: {}
+- cav1:
+    kind: RFCavity
+    length: 0.5
+    RFCavityP:
+      voltage_kv: 100.0        # peak voltage (kV)
+      frequency_hz: 2856.0e6   # RF frequency (Hz)
+      phase_deg: 90.0           # RF phase (degrees)
 ```
 
-## Drift insertion
+### Octupole (Bn3)
 
-Drifts are automatically inserted between elements based on the gap between
-each element's `s_end_m` and the next element's `s_start_m`. There is no need
-to include explicit drift elements in the lattice file.
+Octupoles use `MagneticMultipoleP.Bn3`:
 
-## Type aliases
+```yaml
+- o1:
+    kind: Octupole
+    length: 0.15
+    MagneticMultipoleP:
+      Bn3: 0.3    # Tesla
+```
 
-The following type names are recognized (case-sensitive):
+### Multipole (Bn1–Bn5)
 
-| PALS name | FELsim name | Internal | FOX command |
-|-----------|-------------|----------|-------------|
-| `Quadrupole` | `QUADRUPOLE` | QPF/QPD | `MQ` |
-| `SBend`, `RBend` | `DIPOLE`, `DPH` | DPH | `DIL` |
-| — | `DIPOLE_WEDGE`, `DPW` | DPW | _(consolidated)_ |
-| `Wiggler` | `UNDULATOR`, `UND` | UND | `DL` |
-| `Kicker` | `CORRECTOR_V/H` | STV/STH | _(skipped)_ |
-| `Instrument` | `BPM`, `OTR`, `SPC` | BPM/OTR/SPC | _(skipped)_ |
-| `Marker` | — | DRIFT | `DL` |
+Generic multipoles can carry up to 5 harmonic fields (quad through dodecapole):
+
+```yaml
+- m1:
+    kind: Multipole
+    length: 0.2
+    MagneticMultipoleP:
+      Bn1: 0.5    # quadrupole component
+      Bn2: 0.1    # sextupole component
+      Bn3: 0.05   # octupole component
+```
+
+### Dipole (BendP)
+
+Dipoles use `BendP` with `g_ref` (1/m) and edge angles in radians:
+
+```yaml
+- b1:
+    kind: SBend
+    length: 2.0
+    BendP:
+      g_ref: 0.5    # 1/m → bending angle = g_ref × length
+      e1: 0.1        # entrance edge angle (radians)
+      e2: 0.2        # exit edge angle (radians)
+```
+
+### BeamLine composition
+
+Elements are composed using `line:` references, `inherit:` overrides, and `repeat:`:
+
+```yaml
+- fodo_cell:
+    kind: BeamLine
+    line:
+      - drift1
+      - quad1
+      - drift2:
+          kind: Drift
+          length: 0.5
+      - quad2:
+          inherit: quad1
+          MagneticMultipoleP:
+            Bn1: -1.0
+      - drift1
+
+- fodo_channel:
+    kind: BeamLine
+    line:
+      - fodo_cell:
+          repeat: 3
+```
+
+### Parameter mapping
+
+| PALS field | Normalized dict | Conversion |
+|---|---|---|
+| `MagneticMultipoleP.Bn1` (T) | `bn1` | Direct |
+| `MagneticMultipoleP.Bn2` (T) | `bn2` | Direct |
+| `MagneticMultipoleP.Bn3` (T) | `bn3` | Direct |
+| `MagneticMultipoleP.Bn4` (T) | `bn4` | Direct |
+| `MagneticMultipoleP.Bn5` (T) | `bn5` | Direct |
+| `SolenoidP.Bz` (T) | `bz` | Direct |
+| `RFCavityP.voltage_kv` (kV) | `rf_voltage_kv` | Direct |
+| `RFCavityP.frequency_hz` (Hz) | `rf_frequency_hz` | Direct |
+| `RFCavityP.phase_deg` (deg) | `rf_phase_deg` | Direct |
+| `WigglerP.peak_field` (T) | `wiggler_field` | Direct |
+| `WigglerP.period` (m) | `wiggler_period` | Direct |
+| `BendP.g_ref` (1/m) + `length` (m) | `angle` (deg) | $\theta = g_\mathrm{ref} \times L \times 180/\pi$ |
+| `BendP.e1` / `BendP.e2` (rad) | edge angles (deg) | $\times 180/\pi$ |
+
+---
+
+## Supported element types
+
+| PALS kind | FOX command | Notes |
+|-----------|-------------|-------|
+| `Quadrupole` | `MQ L Bn1 r ;` | Bn1 from `MagneticMultipoleP` |
+| `Sextupole` | `MH L Bn2 r ;` | Bn2 from `MagneticMultipoleP`; drift if absent |
+| `Octupole` | `MO L Bn3 r ;` | Bn3 from `MagneticMultipoleP`; drift if absent |
+| `Multipole` | `M5 L BQ BH BO BD BZ r ;` | Bn1–Bn5; drift if all absent |
+| `Solenoid` | `CMS Bz D L ;` | Bz from `SolenoidP`; drift if absent |
+| `RFCavity` | `RF V 0 W PHI D ;` | Drift if voltage/frequency absent |
+| `Wiggler` | `WI B K L D 0 0 0 ;` | Drift if field/period absent |
+| `SBend`, `RBend` | `DIL L θ g/2 e₁ 0 e₂ 0 ;` | With optional FC/CB |
+| `Drift` | `DL L ;` | |
+| `Kicker`, `Instrument`, `Marker` | _(skipped)_ | Zero-length |
+
+## Known limitations
+
+- **Enge coefficient truncation:** COSY INFINITY's `FC` command accepts at most
+  6 Enge coefficients. If more are provided, they are truncated with a warning.
+
+- **Bn1 sign convention and particle type:** In the official PALS parser,
+  quadrupole polarity labels (QPF/QPD) are assigned from the sign of Bn1 using
+  the proton convention (positive Bn1 = horizontally focusing). For electrons,
+  the labels are inverted. This is cosmetic only — the converter uses Bn1
+  directly for `MQ` commands.
+
+- **Inherit merge depth:** The `inherit:` mechanism merges nested dicts
+  (e.g. `MagneticMultipoleP`) one level deep only. Deeper nesting is not
+  currently supported by any PALS element type.

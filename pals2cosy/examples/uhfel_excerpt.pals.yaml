@@ -1,0 +1,75 @@
+# Beamline excerpt in official PALS format.
+#
+# Linac quadrupoles + first chicane dipole, demonstrating
+# MagneticMultipoleP.Bn1 for quads and BendP for SBend.
+#
+PALS:
+  version: null
+
+  facility:
+    # --- Element definitions ---
+
+    - d_pre_lin:
+        kind: Drift
+        length: 0.358775
+
+    - LQ1:
+        kind: Quadrupole
+        length: 0.0889
+        MagneticMultipoleP:
+          Bn1: -0.03221273  # QPF: Bn1 = -G*I*r = -2.694*0.8857*0.0135
+
+    - d_lin_12:
+        kind: Drift
+        length: 0.195
+
+    - LQ2:
+        kind: Quadrupole
+        length: 0.0889
+        MagneticMultipoleP:
+          Bn1: 0.03829256   # QPD: Bn1 = +G*I*r = 2.694*1.0529*0.0135
+
+    - d_lin_post:
+        kind: Drift
+        length: 0.197625
+
+    - DPHQ:
+        kind: Quadrupole
+        length: 0.0889
+        MagneticMultipoleP:
+          Bn1: -0.13880606  # QPF
+
+    - d_pre_dc1:
+        kind: Drift
+        length: 0.71013
+
+    - DC1_B1:
+        kind: SBend
+        length: 0.0889
+        BendP:
+          g_ref: 0.29476    # 1/m → angle = g_ref × L = 1.5° = 0.02618 rad
+          e1: 0.0
+          e2: 0.02618       # 1.5° in radians
+
+    # --- Beamline composition ---
+
+    - uhfel_excerpt:
+        kind: BeamLine
+        line:
+          - d_pre_lin
+          - LQ1
+          - d_lin_12
+          - LQ2
+          - d_lin_post
+          - DPHQ
+          - d_pre_dc1
+          - DC1_B1
+
+    # --- Lattice ---
+
+    - excerpt_lattice:
+        kind: Lattice
+        branches:
+          - uhfel_excerpt
+
+    - use: excerpt_lattice

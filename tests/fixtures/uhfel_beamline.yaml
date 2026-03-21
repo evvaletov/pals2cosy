@@ -1,9 +1,11 @@
+# Test fixture — not intended for direct use. This lattice is included
+# solely for automated testing of the pals2cosy converter.
 beamline:
   metadata:
     format_version: 2
-    name: UH_FEL_Beamline
+    name: Test_Beamline
     version: '1.0'
-    description: University of Hawaii FEL beamline
+    description: Test beamline for pals2cosy converter validation
     reference_energy_mev: 45.0
     particle_type: electron
   beam_parameters:

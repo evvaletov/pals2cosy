@@ -1,7 +1,7 @@
 project = 'pals2cosy'
 copyright = '2026, Eremey Valetov'
 author = 'Eremey Valetov'
-release = '0.1.0'
+release = '0.4.0'
 
 extensions = ['myst_parser']
 myst_enable_extensions = ['dollarmath', 'amsmath']

@@ -5,6 +5,12 @@
 - Python 3.9+
 - [PyYAML](https://pyyaml.org/) (for YAML input; JSON works without it)
 
+## Install from PyPI
+
+```bash
+pip install pals2cosy
+```
+
 ## Install from source
 
 ```bash
@@ -16,7 +22,7 @@ pip install .
 For development (editable install):
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Verify
@@ -28,6 +34,5 @@ pals2cosy --help
 ## Running tests
 
 ```bash
-pip install pytest
 pytest tests/ -v
 ```

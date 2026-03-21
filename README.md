@@ -1,7 +1,7 @@
 # pals2cosy
 
 Convert [PALS](https://pals-project.readthedocs.io/) lattice files to
-[COSY INFINITY](https://cosyinfinity.org) FOX code.
+[COSY INFINITY](https://cosyinfinity.org) input code.
 
 Supports the **official PALS format** (`PALS:` root with `facility:`/`line:`
 composition) with auto-detection from the root key. Also accepts a flat

@@ -1,8 +1,8 @@
 # pals2cosy
 
 **pals2cosy** converts [PALS](https://pals-project.readthedocs.io/) lattice
-files into [COSY INFINITY](https://cosyinfinity.org) FOX input code.
-The generated FOX program computes the transfer map for the beamline described
+files into [COSY INFINITY](https://cosyinfinity.org) input code.
+The generated program computes the transfer map for the beamline described
 in the input file.
 
 The official PALS format (`PALS:` root) is supported with `facility:` definitions,

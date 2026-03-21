@@ -12,7 +12,7 @@ exclude_patterns = ['_build']
 
 html_theme = 'alabaster'
 html_theme_options = {
-    'description': 'PALS lattice → COSY INFINITY FOX converter',
+    'description': 'PALS lattice → COSY INFINITY converter',
     'fixed_sidebar': True,
 }
 

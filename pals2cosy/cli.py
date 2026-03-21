@@ -52,10 +52,10 @@ def _detect_format(path):
 def main():
     parser = argparse.ArgumentParser(
         prog="pals2cosy",
-        description="Convert a PALS lattice (JSON/YAML) to COSY INFINITY FOX code.",
+        description="Convert a PALS lattice to COSY INFINITY input code.",
     )
     parser.add_argument("input", nargs="?", help="Input lattice file (JSON or YAML)")
-    parser.add_argument("-o", "--output", help="Output FOX file (default: stdout)")
+    parser.add_argument("-o", "--output", help="Output file (default: stdout)")
     parser.add_argument("--fr", type=int, default=0, help="Fringe field order (default: 0)")
     parser.add_argument("--order", type=int, default=3, help="DA computation order (default: 3)")
     parser.add_argument("--dim", type=int, default=3, choices=[2, 3],
@@ -80,7 +80,7 @@ def main():
     parser.add_argument("--examples-dir", action="store_true",
                         help="Print path to bundled example files and exit")
     parser.add_argument("--demo", action="store_true",
-                        help="Convert the bundled FODO example and print FOX to stdout")
+                        help="Convert the bundled FODO example to stdout")
 
     args = parser.parse_args()
 
@@ -99,7 +99,7 @@ def main():
                       particle_override="proton", twiss=True, dimensions=2)
         print("# === Input: fodo.pals.yaml ===\n")
         print(yaml_text)
-        print("# === Output: COSY INFINITY FOX ===\n")
+        print("# === Output: COSY INFINITY ===\n")
         sys.stdout.write(fox)
         return
 

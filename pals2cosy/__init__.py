@@ -1,6 +1,6 @@
-"""pals2cosy — PALS Lattice to COSY INFINITY FOX converter."""
+"""pals2cosy — PALS Lattice to COSY INFINITY (COSYScript) converter."""
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 
 from .converter import convert
 from .parser import parse_lattice

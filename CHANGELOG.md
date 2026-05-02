@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.0] — 2026-05-02
+
+### Added
+- Numeric validation helpers (`_to_float`, `_to_nonneg_float`,
+  `_to_positive_float`) applied to all PALS element parameters: lengths,
+  `MagneticMultipoleP.Bn*`, `BendP.g_ref`/`e1`/`e2`, `WigglerP.peak_field`/
+  `period`, `SolenoidP.Bz`, `RFCavityP.*`, `ApertureP.y_width`. Malformed
+  numeric input now raises `ValueError` with the offending element/field name.
+  NaN and infinity are rejected.
+- `WigglerP.period > 0` guard in the converter (was `ZeroDivisionError`).
+- `length_m` vs `s_end_m - s_start_m` consistency check in the flat parser.
+- Particle mass database (`PARTICLE_MASSES_MEV` in `constants.py`) covering
+  the same set of species the converter emits reference-particle commands for
+  (electron, positron, proton, antiproton, muon ±, pion ±, deuteron, alpha,
+  carbon12). `--particle` override is now case-insensitive for mass lookup.
+
+### Changed (breaking)
+- Negative `repeat` and the `direction` modifier in official PALS lattices
+  now raise `ValueError` instead of warning. Reversed-direction expansion is
+  not implemented; silent forward expansion was misleading.
+- Overlapping elements in the flat parser now raise `ValueError` instead of
+  warning. Producing physically impossible COSYScript was masking real input
+  errors.
+- Top-level access in both parsers now raises `ValueError` with a clear
+  message instead of raw `KeyError`/`TypeError`.
+
+### Documentation
+- Replaced "FOX" with "COSYScript" or "COSY INFINITY input" throughout
+  user-visible text. COSYScript is the official COSY INFINITY domain-specific
+  language; "FOX" is a `.fox`-extension shorthand, not an official name.
+
 ## [0.4.0] — 2026-03-21
 
 ### Added
@@ -36,9 +67,9 @@
 
 ### Added
 - Particle type support (`--particle electron|proton`).
-- Element name comments in FOX output (`--no-comments` to disable).
+- Element name comments in COSYScript output (`--no-comments` to disable).
 
 ## [0.1.0] — 2026-02-22
 
-Initial release. PALS lattice parsing, dipole consolidation, FOX code generation
+Initial release. PALS lattice parsing, dipole consolidation, COSYScript generation
 with Enge fringe fields (FC/FD) and negative-angle CB wrapping.

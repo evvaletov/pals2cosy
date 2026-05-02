@@ -3,7 +3,7 @@
 ## Command line
 
 ```bash
-# Auto-detect format and print FOX code to stdout
+# Auto-detect format and print COSYScript code to stdout
 pals2cosy beamline.pals.yaml --ke 1000 --particle proton
 
 # Write to file with fringe fields
@@ -23,7 +23,7 @@ pals2cosy beamline.pals.yaml --dim 2 --order 5 --ke 40
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o FILE` | stdout | Output FOX file |
+| `-o FILE` | stdout | Output COSYScript file |
 | `--ke FLOAT` | from lattice | Kinetic energy (MeV) |
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
@@ -54,7 +54,7 @@ with open("output.fox", "w") as f:
     f.write(fox_code)
 ```
 
-## Running the generated FOX code
+## Running the generated COSYScript code
 
 The output is a complete COSY INFINITY input file. To run it:
 

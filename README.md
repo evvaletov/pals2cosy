@@ -1,11 +1,9 @@
 # pals2cosy
 
 Convert [PALS](https://pals-project.readthedocs.io/) lattice files to
-[COSY INFINITY](https://cosyinfinity.org) input code.
-
-Supports the **official PALS format** (`PALS:` root with `facility:`/`line:`
-composition) with auto-detection from the root key. Also accepts a flat
-`beamline:` format with positioned elements.
+[COSY INFINITY](https://cosyinfinity.org) input code. Accepts the
+official PALS format (`PALS:` root with `facility:`/`line:` composition,
+auto-detected) or a flat `beamline:` format with positioned elements.
 
 ## Installation
 
@@ -41,7 +39,7 @@ pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-o FILE` | stdout | Output FOX file |
+| `-o FILE` | stdout | Output COSYScript file |
 | `--ke FLOAT` | from lattice | Kinetic energy (MeV) |
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
@@ -51,7 +49,7 @@ pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
 | `--twiss` | off | Append GT Twiss extraction (requires periodic lattice) |
 | `--mode STR` | auto | Input format override |
 | `--beamline NAME` | last | BeamLine to expand (official PALS only) |
-| `--no-comments` | off | Omit element name comments in FOX output |
+| `--no-comments` | off | Omit element name comments in COSYScript output |
 
 ## Input format
 
@@ -82,7 +80,7 @@ See `examples/fodo.pals.yaml` for a complete FODO cell with `inherit:` and `repe
 
 ## Element mapping
 
-| Input type | FOX command | Notes |
+| Input type | COSYScript command | Notes |
 |-----------|-------------|-------|
 | Quadrupole (Bn1) | `MQ L Bn1 r ;` | Direct pole-tip field |
 | Quadrupole (current) | `MQ L {±G·I·r} r ;` | Sign from polarity |
@@ -99,7 +97,7 @@ See `examples/fodo.pals.yaml` for a complete FODO cell with `inherit:` and `repe
 
 ## Supported particles
 
-| Name | FOX command | Notes |
+| Name | COSYScript command | Notes |
 |------|------------|-------|
 | `electron` | `RPE` | Preset |
 | `proton` | `RPP` | Preset |
@@ -122,14 +120,15 @@ See `examples/fodo.pals.yaml` for a complete FODO cell with `inherit:` and `repe
 - **Quad sign convention:** The current-based quadrupole path (`±G·I·r`) uses an
   electron-specific sign convention (QPF→negative B, QPD→positive B). Proton beamlines
   should use Bn1 (pole-tip field) instead, which bypasses the sign logic.
+- **Reversed direction:** PALS `direction` and negative `repeat` are not supported.
+  Both emit a warning; the converter expands the lattice in the forward direction.
 
 ## Roadmap
 
-pals2cosy implements provisional support for element types and parameters that
-are present in COSY INFINITY but not yet part of the official PALS specification,
-such as `MagneticMultipoleP.Bn2`–`Bn5`, `SolenoidP.Bz`, and `RFCavityP`. As a
-documented PALS use case, these extensions may inform future PALS standardization.
-If PALS adopts a different parameterization, pals2cosy can be adjusted accordingly.
+pals2cosy supports element types and parameters available in COSY INFINITY
+but not yet in the official PALS specification: `MagneticMultipoleP.Bn2`–`Bn5`,
+`SolenoidP.Bz`, and `RFCavityP`. These provisional extensions inform feedback
+to the PALS standardization effort and will track the standard as it evolves.
 
 Planned extensions:
 - Combined-function magnets (dipole + multipole fields → COSY `MC`/`MS`)
@@ -138,11 +137,17 @@ Planned extensions:
 - Particle tracking (`SR` + `TR` + `PRAY`/`WRAY`)
 - FIT optimization blocks
 
+## Author
+
+Eremey Valetov
+
+- Department of Physics and Astronomy, Michigan State University, East Lansing, MI, USA
+- Department of Physics and Astronomy, University of Hawaiʻi at Mānoa, Honolulu, HI, USA
+
 ## Acknowledgments
 
 This work was supported in part by DOE EPSCoR Award DE-SC0025583. The converter
-is based in part on research performed on the University of Hawaiʻi free electron
-laser by the author.
+draws on the author's work on the University of Hawaiʻi free electron laser.
 
 ## Tests
 

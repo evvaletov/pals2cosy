@@ -66,16 +66,40 @@ def parse_lattice(path, mode="felsim"):
         raise ValueError(f"Unknown mode '{mode}', expected 'pals' or 'felsim'")
 
     data = _load_file(path)
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Lattice file '{path}' must contain a YAML/JSON mapping at the root, "
+            f"got {type(data).__name__}"
+        )
+    if "beamline" not in data:
+        raise ValueError(
+            f"Lattice file '{path}' is missing the required 'beamline' root key"
+        )
     beamline = data["beamline"]
+    if not isinstance(beamline, dict):
+        raise ValueError(
+            f"Lattice file '{path}': 'beamline' must be a mapping, "
+            f"got {type(beamline).__name__}"
+        )
 
-    meta = beamline["metadata"]
+    meta = beamline.get("metadata", {})
     fv = meta.get("format_version", 2)
     if fv not in (1, 2, 3):
         raise ValueError(f"Unsupported format_version {fv}")
 
-    bp = beamline["beam_parameters"]
-    particle = bp["particle"]
-    global_settings = beamline.get("global_settings", {})
+    bp = beamline.get("beam_parameters")
+    if not isinstance(bp, dict):
+        raise ValueError(
+            f"Lattice file '{path}' is missing or has invalid "
+            f"'beamline.beam_parameters' (expected a mapping)"
+        )
+    particle = bp.get("particle")
+    if not isinstance(particle, dict):
+        raise ValueError(
+            f"Lattice file '{path}' is missing or has invalid "
+            f"'beamline.beam_parameters.particle' (expected a mapping)"
+        )
+    global_settings = beamline.get("global_settings", {}) or {}
 
     beam_params = {
         "kinetic_energy_mev": particle["kinetic_energy_mev"],
@@ -88,7 +112,12 @@ def parse_lattice(path, mode="felsim"):
         "source_file": os.path.basename(path),
     }
 
-    raw_elements = beamline["elements"]
+    raw_elements = beamline.get("elements")
+    if not isinstance(raw_elements, list):
+        raise ValueError(
+            f"Lattice file '{path}' is missing or has invalid "
+            f"'beamline.elements' (expected a list)"
+        )
     positioned = []
     for raw in raw_elements:
         elem = _normalize_element(raw, mode=mode)
@@ -103,7 +132,7 @@ def parse_lattice(path, mode="felsim"):
     for elem in positioned:
         gap = elem["s_start"] - prev_end
         if gap < -1e-9:
-            warnings.warn(
+            raise ValueError(
                 f"Element '{elem.get('name', '<unnamed>')}' overlaps previous element "
                 f"by {-gap:.6g} m (s_start={elem['s_start']}, prev_end={prev_end})"
             )
@@ -161,7 +190,13 @@ def _normalize_element(raw, mode="felsim"):
         )
         return None
 
-    length = raw.get("length_m", s_end - s_start)
+    span = s_end - s_start
+    length = raw.get("length_m", span)
+    if "length_m" in raw and abs(length - span) > 1e-6:
+        raise ValueError(
+            f"Element '{raw.get('name', '<unnamed>')}' has length_m={length} "
+            f"inconsistent with s_end_m - s_start_m = {span}"
+        )
     params = raw.get("parameters", {})
     name = raw.get("name", "")
 

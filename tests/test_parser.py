@@ -240,22 +240,22 @@ def test_empty_file_raises(tmp_path):
 
 
 def test_non_dict_yaml_root_raises(tmp_path):
-    """YAML that parses to a list raises an error."""
+    """YAML that parses to a list raises a clear ValueError."""
     import yaml
     p = str(tmp_path / "list.yaml")
     with open(p, "w") as f:
         yaml.dump([1, 2, 3], f)
-    with pytest.raises((TypeError, KeyError, AttributeError)):
+    with pytest.raises(ValueError, match="mapping"):
         parse_lattice(p)
 
 
 def test_missing_beamline_key_raises(tmp_path):
-    """YAML without 'beamline' root key raises KeyError."""
+    """YAML without 'beamline' root key raises a clear ValueError."""
     import yaml
     p = str(tmp_path / "nobeamline.yaml")
     with open(p, "w") as f:
         yaml.dump({"other": {}}, f)
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="beamline"):
         parse_lattice(p)
 
 
@@ -344,8 +344,8 @@ def test_multipole_resolves_to_mult():
         os.unlink(path)
 
 
-def test_overlapping_elements_warns():
-    """Overlapping elements emit a warning."""
+def test_overlapping_elements_raises():
+    """Overlapping elements raise ValueError (fail-fast on physically invalid input)."""
     data = _v3_lattice([
         {"name": "D1", "type": "DRIFT",
          "s_start_m": 0.0, "s_end_m": 0.5, "length_m": 0.5,
@@ -356,10 +356,8 @@ def test_overlapping_elements_warns():
     ])
     path = _write_v3_file(data)
     try:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            _, elements = parse_lattice(path)
-        assert any("overlaps" in str(x.message) for x in w)
+        with pytest.raises(ValueError, match="overlaps"):
+            parse_lattice(path)
     finally:
         os.unlink(path)
 

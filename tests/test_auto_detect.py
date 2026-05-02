@@ -27,7 +27,7 @@ def test_detect_felsim_v2():
 
 
 def test_cli_auto_fodo(tmp_path):
-    """End-to-end: auto-detect FODO → FOX output."""
+    """End-to-end: auto-detect FODO → COSYScript output."""
     import subprocess
     fodo = os.path.join(EXAMPLES_DIR, "fodo.pals.yaml")
     out = tmp_path / "fodo.fox"
@@ -43,7 +43,7 @@ def test_cli_auto_fodo(tmp_path):
 
 
 def test_cli_auto_felsim(tmp_path):
-    """End-to-end: auto-detect flat beamline → FOX output."""
+    """End-to-end: auto-detect flat beamline → COSYScript output."""
     import subprocess
     uhfel = os.path.join(os.path.dirname(__file__), "fixtures", "uhfel_beamline.yaml")
     out = tmp_path / "uhfel.fox"
@@ -97,7 +97,7 @@ def test_mode_pals_is_strict_felsim():
     from pals2cosy.parser import parse_lattice
     fodo = os.path.join(EXAMPLES_DIR, "fodo.pals.yaml")
     # fodo.pals.yaml has 'PALS' root, not 'beamline', so FELsim parser will fail
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError, match="beamline"):
         parse_lattice(fodo, mode="pals")
 
 

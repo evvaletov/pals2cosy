@@ -8,7 +8,7 @@ pals2cosy/
 ├── _io.py            Shared file loading (JSON, YAML, TOML)
 ├── parser.py         Flat beamline (beamline: root) → normalized element list
 ├── pals_parser.py    Official PALS (PALS: root) → normalized element list
-├── converter.py      Element list → FOX code string
+├── converter.py      Element list → COSYScript string
 ├── cli.py            Command-line interface (auto-detection)
 └── __main__.py       python -m pals2cosy entry point
 ```
@@ -56,7 +56,7 @@ converter.convert(beam_params, elements, ...)
          Wraps lattice body in COSY boilerplate
     │
     ▼
-Complete FOX code string
+Complete COSYScript string
 ```
 
 ## Parsers
@@ -92,8 +92,8 @@ Both parsers produce the same `(beam_params, elements)` tuple for the converter.
 1. **Consolidation:** Detects dipole representations and normalizes them
    into `DIPOLE_CONSOLIDATED` elements for uniform handling.
 
-2. **FOX generation:** Iterates over the consolidated list and emits the
-   appropriate FOX commands for each element type. The complete FOX program
+2. **COSYScript generation:** Iterates over the consolidated list and emits the
+   appropriate COSYScript commands for each element type. The complete program
    is assembled from a template that includes variable declarations, the
    lattice procedure, setup commands (`OV`, `RPE`/`RPP`/etc., `FR`), and
    optionally Twiss output (`--twiss`).

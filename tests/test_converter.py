@@ -1,6 +1,6 @@
-"""Tests for pals2cosy FOX converter.
+"""Tests for pals2cosy COSYScript converter.
 
-Tests for pals2cosy FOX converter.
+Tests for pals2cosy COSYScript converter.
 """
 
 import os
@@ -29,11 +29,11 @@ def fox_output(uhfel):
 
 
 def _extract_commands(fox_text, cmd_pattern):
-    """Extract FOX commands matching a regex pattern, stripping inline comments."""
+    """Extract COSYScript commands matching a regex pattern, stripping inline comments."""
     results = []
     for line in fox_text.splitlines():
         if re.match(r'\s+' + cmd_pattern, line):
-            # Strip trailing FOX comments: { ... }
+            # Strip trailing COSYScript comments: { ... }
             cmd = re.sub(r'\s*\{[^}]*\}\s*$', '', line.strip())
             results.append(cmd)
     return results
@@ -171,7 +171,7 @@ def test_standalone_dph_no_enge():
     assert d["exit_enge"] is None
 
 
-# --- FOX command generation tests ---
+# --- COSYScript command generation tests ---
 
 def test_quad_formula(fox_output):
     """Verify MQ b_pole = sign * G * I * r."""
@@ -357,7 +357,7 @@ def test_bn1_quad_fox():
 
 
 def test_fodo_fox():
-    """End-to-end: official PALS FODO → FOX with Bn1 quads."""
+    """End-to-end: official PALS FODO → COSYScript with Bn1 quads."""
     from pals2cosy.pals_parser import parse_lattice as parse_pals
     fodo_file = os.path.join(EXAMPLES_DIR, "fodo.pals.yaml")
     bp, elems = parse_pals(fodo_file, ke_override=1000, particle_override="proton")
@@ -389,7 +389,7 @@ def test_uhfel_excerpt_dipole():
 
 
 def test_beamline_total_length(fox_output):
-    """Total beamline length from FOX (sum of DL+MQ+DIL) should match YAML."""
+    """Total beamline length from COSYScript (sum of DL+MQ+DIL) should match YAML."""
     dl_lengths = [float(c.split()[1]) for c in _extract_commands(fox_output, r'DL')]
     mq_lengths = [float(c.split()[1]) for c in _extract_commands(fox_output, r'MQ')]
     dil_lengths = [float(c.split()[1]) for c in _extract_commands(fox_output, r'DIL')]
@@ -399,7 +399,7 @@ def test_beamline_total_length(fox_output):
 
 
 def test_element_counts(fox_output):
-    """Verify expected element counts in generated FOX."""
+    """Verify expected element counts in generated COSYScript."""
     dl_count = len(_extract_commands(fox_output, r'DL'))
     mq_count = len(_extract_commands(fox_output, r'MQ'))
     dil_count = len(_extract_commands(fox_output, r'DIL'))
@@ -426,7 +426,7 @@ def test_lone_dpw_not_consolidated():
 
 
 def test_comment_sanitization():
-    """Element name containing } doesn't break FOX comment delimiters."""
+    """Element name containing } doesn't break COSYScript comment delimiters."""
     elements = [
         {"type": "DRIFT", "name": "bad}name{here", "length": 0.5,
          "s_start": 0.0, "s_end": 0.5},
@@ -443,7 +443,7 @@ def test_comment_sanitization():
 
 
 def test_lone_dpw_fox_output():
-    """A lone DPW emits a drift + warning in FOX output."""
+    """A lone DPW emits a drift + warning in COSYScript output."""
     elements = [
         {"type": "DPW", "name": "W1", "length": 0.01, "wedge_angle": 5.0,
          "angle": 15.0, "pole_gap": 0.01, "dipole_length": 0.2,

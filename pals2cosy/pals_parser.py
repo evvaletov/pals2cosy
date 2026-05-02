@@ -12,7 +12,7 @@ import os
 import warnings
 
 from ._io import load_file as _load_file
-from .constants import E0_ELECTRON, E0_PROTON, F_RF_DEFAULT
+from .constants import E0_ELECTRON, E0_PROTON, F_RF_DEFAULT, PARTICLE_MASSES_MEV
 
 
 def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=None):
@@ -35,8 +35,21 @@ def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=
         (beam_params, elements) matching the ``parser.parse_lattice()`` contract.
     """
     data = _load_file(path)
-
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"PALS file '{path}' must contain a YAML/JSON mapping at the root, "
+            f"got {type(data).__name__}"
+        )
+    if "PALS" not in data:
+        raise ValueError(
+            f"PALS file '{path}' is missing the required 'PALS' root key"
+        )
     pals = data["PALS"]
+    if not isinstance(pals, dict):
+        raise ValueError(
+            f"PALS file '{path}': 'PALS' must be a mapping, "
+            f"got {type(pals).__name__}"
+        )
     facility_list = pals.get("facility", [])
 
     # Build name→definition index from the facility list
@@ -156,13 +169,16 @@ def _resolve_inline(name, defn, catalog, stack):
     if repeat == 0:
         warnings.warn(f"Element '{name}': repeat=0 produces no elements")
     elif repeat < 0:
-        warnings.warn(
-            f"Element '{name}': negative repeat ({repeat}) treated as {abs(repeat)} "
-            f"(reversed direction not supported)"
+        raise ValueError(
+            f"Element '{name}': negative repeat ({repeat}) is not supported "
+            f"(reversed expansion would require flipping bend angles, edge "
+            f"angles, and element order, which is not implemented)"
         )
     if "direction" in defn:
-        warnings.warn(
-            f"Element '{name}': 'direction' modifier is not supported and will be ignored"
+        raise ValueError(
+            f"Element '{name}': 'direction' modifier is not supported "
+            f"(would require flipping bend signs and edge angles, "
+            f"which is not implemented)"
         )
 
     # If the inline dict only has modifiers (repeat, inherit, etc.) and the name
@@ -228,17 +244,50 @@ _PALS_KIND_MAP = {
 }
 
 
+def _to_float(value, name, field):
+    try:
+        f = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Element '{name}': field '{field}' must be numeric, got {value!r}"
+        ) from exc
+    if not math.isfinite(f):
+        raise ValueError(
+            f"Element '{name}': field '{field}' must be a finite number, got {f}"
+        )
+    return f
+
+
+def _to_nonneg_float(value, name, field):
+    f = _to_float(value, name, field)
+    if f < 0:
+        raise ValueError(
+            f"Element '{name}': field '{field}' must be non-negative, got {f}"
+        )
+    return f
+
+
+def _to_positive_float(value, name, field):
+    f = _to_float(value, name, field)
+    if f <= 0:
+        raise ValueError(
+            f"Element '{name}': field '{field}' must be positive, got {f}"
+        )
+    return f
+
+
 def _position_and_normalize(flat_elements):
     """Assign cumulative s_start/s_end and normalize to internal dict format."""
     result = []
     s = 0.0
 
     for raw in flat_elements:
-        length = raw.get("length", 0.0)
+        name = raw.get("name", "<unnamed>")
+        length = _to_nonneg_float(raw.get("length", 0.0), name, "length")
         kind = raw.get("kind")
         if kind is None:
             warnings.warn(
-                f"Element '{raw.get('name', '<unnamed>')}' has no 'kind'; defaulting to Drift"
+                f"Element '{name}' has no 'kind'; defaulting to Drift"
             )
             kind = "Drift"
         internal_type = _normalize_kind(kind, raw)
@@ -274,19 +323,19 @@ def _position_and_normalize(flat_elements):
             mmp = raw.get("MagneticMultipoleP", {})
             bn1 = mmp.get("Bn1")
             if bn1 is not None:
-                elem["bn1"] = float(bn1)
+                elem["bn1"] = _to_float(bn1, name, "MagneticMultipoleP.Bn1")
 
         elif kind == "Sextupole":
             mmp = raw.get("MagneticMultipoleP", {})
             bn2 = mmp.get("Bn2")
             if bn2 is not None:
-                elem["bn2"] = float(bn2)
+                elem["bn2"] = _to_float(bn2, name, "MagneticMultipoleP.Bn2")
 
         elif kind == "Octupole":
             mmp = raw.get("MagneticMultipoleP", {})
             bn3 = mmp.get("Bn3")
             if bn3 is not None:
-                elem["bn3"] = float(bn3)
+                elem["bn3"] = _to_float(bn3, name, "MagneticMultipoleP.Bn3")
 
         elif kind == "Multipole":
             mmp = raw.get("MagneticMultipoleP", {})
@@ -294,50 +343,51 @@ def _position_and_normalize(flat_elements):
                               ("bn4", "Bn4"), ("bn5", "Bn5")]:
                 val = mmp.get(key)
                 if val is not None:
-                    elem[attr] = float(val)
+                    elem[attr] = _to_float(val, name, f"MagneticMultipoleP.{key}")
 
         elif kind == "Wiggler":
             wig_p = raw.get("WigglerP", {})
             bw = wig_p.get("peak_field")
             if bw is not None:
-                elem["wiggler_field"] = float(bw)
+                elem["wiggler_field"] = _to_float(bw, name, "WigglerP.peak_field")
             period = wig_p.get("period")
             if period is not None:
-                elem["wiggler_period"] = float(period)
+                elem["wiggler_period"] = _to_positive_float(period, name, "WigglerP.period")
 
         elif kind == "Solenoid":
             sol_p = raw.get("SolenoidP", {})
             bz = sol_p.get("Bz")
             if bz is not None:
-                elem["bz"] = float(bz)
+                elem["bz"] = _to_float(bz, name, "SolenoidP.Bz")
 
         elif kind == "RFCavity":
             rf_p = raw.get("RFCavityP", {})
             v = rf_p.get("voltage_kv")
             if v is not None:
-                elem["rf_voltage_kv"] = float(v)
+                elem["rf_voltage_kv"] = _to_float(v, name, "RFCavityP.voltage_kv")
             f = rf_p.get("frequency_hz")
             if f is not None:
-                elem["rf_frequency_hz"] = float(f)
+                elem["rf_frequency_hz"] = _to_positive_float(f, name, "RFCavityP.frequency_hz")
             phi = rf_p.get("phase_deg")
             if phi is not None:
-                elem["rf_phase_deg"] = float(phi)
+                elem["rf_phase_deg"] = _to_float(phi, name, "RFCavityP.phase_deg")
 
         elif kind in ("SBend", "RBend"):
             bend_p = raw.get("BendP", {})
-            g_ref = bend_p.get("g_ref", 0.0)
+            g_ref = _to_float(bend_p.get("g_ref", 0.0), name, "BendP.g_ref")
             angle_rad = g_ref * length
             elem["angle"] = math.degrees(angle_rad)
             elem["dipole_length"] = length
 
-            e1 = bend_p.get("e1", 0.0)
-            e2 = bend_p.get("e2", 0.0)
+            e1 = _to_float(bend_p.get("e1", 0.0), name, "BendP.e1")
+            e2 = _to_float(bend_p.get("e2", 0.0), name, "BendP.e2")
             elem["entrance_edge_angle"] = math.degrees(e1)
             elem["exit_edge_angle"] = math.degrees(e2)
 
             # Pole gap from aperture or explicit parameter
             aperture_p = raw.get("ApertureP", {})
-            elem["pole_gap"] = aperture_p.get("y_width", 0.0)
+            y_width = aperture_p.get("y_width", 0.0)
+            elem["pole_gap"] = _to_nonneg_float(y_width, name, "ApertureP.y_width")
 
         result.append(elem)
         s += length
@@ -356,7 +406,9 @@ def _normalize_kind(kind, raw):
     """
     if kind == "Quadrupole":
         mmp = raw.get("MagneticMultipoleP", {})
-        bn1 = mmp.get("Bn1", 0.0)
+        raw_bn1 = mmp.get("Bn1", 0.0)
+        bn1 = _to_float(raw_bn1, raw.get("name", "<unnamed>"),
+                        "MagneticMultipoleP.Bn1")
         return "QPF" if bn1 >= 0 else "QPD"
     if kind == "Kicker":
         plane = raw.get("plane", "vertical")
@@ -369,7 +421,7 @@ def _normalize_kind(kind, raw):
 def _extract_beam_params(catalog, facility_list, path, ke_override, particle_override):
     """Extract beam parameters from Lattice definition or CLI overrides."""
     # Try to find a Lattice with particle info
-    particle_type = particle_override
+    particle_type = particle_override.lower() if particle_override else None
     ke = ke_override
     mass_mev = E0_PROTON
 
@@ -397,14 +449,12 @@ def _extract_beam_params(catalog, facility_list, path, ke_override, particle_ove
             "Use --particle to specify explicitly."
         )
 
-    if particle_type == "electron":
-        mass_mev = E0_ELECTRON
-    elif particle_type == "proton":
-        mass_mev = E0_PROTON
-    else:
+    mass_mev = PARTICLE_MASSES_MEV.get(particle_type)
+    if mass_mev is None:
         warnings.warn(
             f"Unknown particle species '{particle_type}'; using proton mass as fallback"
         )
+        mass_mev = E0_PROTON
 
     if ke is None:
         raise ValueError(

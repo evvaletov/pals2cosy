@@ -281,7 +281,7 @@ def test_unresolved_reference_raises():
 
 
 def test_octupole_emitted_as_drift():
-    """Octupole element is emitted as a passive drift in FOX output."""
+    """Octupole element is emitted as a passive drift in COSYScript output."""
     import yaml, tempfile
     from pals2cosy.converter import convert
     pals_data = {
@@ -311,7 +311,7 @@ def test_octupole_emitted_as_drift():
 
 
 def test_solenoid_emitted_as_drift():
-    """Solenoid element is emitted as a passive drift in FOX output."""
+    """Solenoid element is emitted as a passive drift in COSYScript output."""
     import yaml, tempfile
     from pals2cosy.converter import convert
     pals_data = {
@@ -337,8 +337,8 @@ def test_solenoid_emitted_as_drift():
 
 # --- QA4: Warning path coverage ---
 
-def test_negative_repeat_warns():
-    """Negative repeat emits a warning and produces abs(repeat) elements."""
+def test_negative_repeat_raises():
+    """Negative repeat is unsupported and raises ValueError."""
     import yaml, tempfile
     pals_data = {
         "PALS": {
@@ -357,13 +357,10 @@ def test_negative_repeat_warns():
         yaml.dump(pals_data, f)
         tmp_path = f.name
     try:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            _, elements = parse_lattice(tmp_path, ke_override=1000,
-                                        particle_override="proton",
-                                        beamline_name="main")
-        assert any("negative repeat" in str(x.message) for x in w)
-        assert len(elements) == 3
+        with pytest.raises(ValueError, match="negative repeat"):
+            parse_lattice(tmp_path, ke_override=1000,
+                          particle_override="proton",
+                          beamline_name="main")
     finally:
         os.unlink(tmp_path)
 
@@ -399,8 +396,8 @@ def test_extra_keys_on_beamline_ref_warns():
         os.unlink(tmp_path)
 
 
-def test_direction_modifier_warns():
-    """Direction modifier emits a warning."""
+def test_direction_modifier_raises():
+    """Direction modifier is unsupported and raises ValueError."""
     import yaml, tempfile
     pals_data = {
         "PALS": {
@@ -418,12 +415,10 @@ def test_direction_modifier_warns():
         yaml.dump(pals_data, f)
         tmp_path = f.name
     try:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            _, elements = parse_lattice(tmp_path, ke_override=1000,
-                                        particle_override="proton",
-                                        beamline_name="main")
-        assert any("direction" in str(x.message) for x in w)
+        with pytest.raises(ValueError, match="direction"):
+            parse_lattice(tmp_path, ke_override=1000,
+                          particle_override="proton",
+                          beamline_name="main")
     finally:
         os.unlink(tmp_path)
 
@@ -464,7 +459,7 @@ def test_unknown_species_mass_warns():
                 {"main": {"kind": "BeamLine", "line": ["d1"]}},
                 {"lat": {
                     "kind": "Lattice",
-                    "particle": {"species": "positron", "kinetic_energy": 500e6},
+                    "particle": {"species": "tachyon", "kinetic_energy": 500e6},
                     "branches": ["main"],
                 }},
                 {"use": "lat"},
@@ -479,6 +474,116 @@ def test_unknown_species_mass_warns():
             warnings.simplefilter("always")
             bp, _ = parse_lattice(tmp_path)
         assert any("Unknown particle species" in str(x.message) for x in w)
-        assert bp["particle_type"] == "positron"
+        assert bp["particle_type"] == "tachyon"
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_extended_species_mass_recognized():
+    """Extended particle species (e.g. positron, muon) get correct mass without warning."""
+    import yaml, tempfile
+    from pals2cosy.constants import E0_MUON
+    pals_data = {
+        "PALS": {
+            "version": None,
+            "facility": [
+                {"d1": {"kind": "Drift", "length": 1.0}},
+                {"main": {"kind": "BeamLine", "line": ["d1"]}},
+                {"lat": {
+                    "kind": "Lattice",
+                    "particle": {"species": "muon", "kinetic_energy": 500e6},
+                    "branches": ["main"],
+                }},
+                {"use": "lat"},
+            ]
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.pals.yaml', delete=False) as f:
+        yaml.dump(pals_data, f)
+        tmp_path = f.name
+    try:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bp, _ = parse_lattice(tmp_path)
+        assert not any("Unknown particle species" in str(x.message) for x in w)
+        assert bp["particle_type"] == "muon"
+        assert abs(bp["mass_mev"] - E0_MUON) < 1e-6
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_nan_length_rejected():
+    """A NaN length value is rejected with a clear error."""
+    import yaml, tempfile
+    pals_data = {
+        "PALS": {
+            "version": None,
+            "facility": [
+                {"d1": {"kind": "Drift", "length": float("nan")}},
+                {"main": {"kind": "BeamLine", "line": ["d1"]}},
+            ]
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.pals.yaml', delete=False) as f:
+        yaml.dump(pals_data, f)
+        tmp_path = f.name
+    try:
+        with pytest.raises(ValueError, match="finite"):
+            parse_lattice(tmp_path, ke_override=1000,
+                          particle_override="proton",
+                          beamline_name="main")
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_nonnumeric_bn1_rejected():
+    """Quadrupole Bn1 with non-numeric value is rejected with a clear error."""
+    import yaml, tempfile
+    pals_data = {
+        "PALS": {
+            "version": None,
+            "facility": [
+                {"q1": {"kind": "Quadrupole", "length": 0.1,
+                        "MagneticMultipoleP": {"Bn1": "bad"}}},
+                {"main": {"kind": "BeamLine", "line": ["q1"]}},
+            ]
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.pals.yaml', delete=False) as f:
+        yaml.dump(pals_data, f)
+        tmp_path = f.name
+    try:
+        with pytest.raises(ValueError, match="MagneticMultipoleP.Bn1"):
+            parse_lattice(tmp_path, ke_override=1000,
+                          particle_override="proton",
+                          beamline_name="main")
+    finally:
+        os.unlink(tmp_path)
+
+
+def test_particle_override_case_insensitive():
+    """--particle Positron (mixed case) resolves to positron mass, not proton fallback."""
+    import yaml, tempfile
+    from pals2cosy.constants import E0_POSITRON
+    pals_data = {
+        "PALS": {
+            "version": None,
+            "facility": [
+                {"d1": {"kind": "Drift", "length": 1.0}},
+                {"main": {"kind": "BeamLine", "line": ["d1"]}},
+            ]
+        }
+    }
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.pals.yaml', delete=False) as f:
+        yaml.dump(pals_data, f)
+        tmp_path = f.name
+    try:
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            bp, _ = parse_lattice(tmp_path, ke_override=1000,
+                                  particle_override="Positron",
+                                  beamline_name="main")
+        assert not any("Unknown particle species" in str(x.message) for x in w)
+        assert abs(bp["mass_mev"] - E0_POSITRON) < 1e-6
     finally:
         os.unlink(tmp_path)

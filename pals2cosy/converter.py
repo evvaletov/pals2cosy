@@ -1,4 +1,4 @@
-"""Convert a parsed PALS lattice to COSY INFINITY FOX code.
+"""Convert a parsed PALS lattice to COSY INFINITY COSYScript.
 
 Author: Eremey Valetov
 """
@@ -9,7 +9,7 @@ import warnings
 
 from .constants import G_QUAD_DEFAULT
 
-# Element types that produce no FOX optics commands (emitted as DL if length > 0)
+# Element types that produce no COSYScript optics commands (emitted as DL if length > 0)
 _PASSIVE_TYPES = frozenset({
     "BPM", "OTR", "STV", "STH", "SPC", "XRS", "BSW",
 })
@@ -24,7 +24,7 @@ def convert(beam_params, elements,
             particle_override=None,
             comments=True,
             twiss=False):
-    """Convert parsed lattice to COSY INFINITY FOX code.
+    """Convert parsed lattice to COSY INFINITY COSYScript.
 
     Parameters
     ----------
@@ -45,14 +45,14 @@ def convert(beam_params, elements,
     particle_override : str or None
         Override particle type.
     comments : bool
-        Include element name comments in FOX code.
+        Include element name comments in COSYScript.
     twiss : bool
         Append GT Twiss extraction and JSON output (requires periodic lattice).
 
     Returns
     -------
     str
-        Complete FOX code.
+        Complete COSYScript.
     """
     ke = ke_override if ke_override is not None else beam_params["kinetic_energy_mev"]
     particle = particle_override or beam_params.get("particle_type", "electron")
@@ -141,7 +141,7 @@ def _consolidate_dipoles(elements):
 
 
 # ---------------------------------------------------------------------------
-# FOX code generation
+# COSYScript generation
 # ---------------------------------------------------------------------------
 
 def _generate_lattice_body(elements, G, r, comments, emit_fc=True):
@@ -237,6 +237,11 @@ def _generate_lattice_body(elements, G, r, comments, emit_fc=True):
             bw = elem.get("wiggler_field")
             period = elem.get("wiggler_period")
             if bw is not None and period is not None:
+                if period <= 0:
+                    raise ValueError(
+                        f"Wiggler '{elem.get('name', '')}': period must be positive, "
+                        f"got {period}"
+                    )
                 k = 2 * math.pi / period
                 lines.append(
                     f"    WI {bw} {k} {elem['length']} {r} 0 0 0 ;{_comment(elem)}")
@@ -246,7 +251,7 @@ def _generate_lattice_body(elements, G, r, comments, emit_fc=True):
         elif etype == "DPW":
             # Lone DPW not part of a triplet — emit as drift with warning
             warnings.warn(
-                f"Standalone DPW '{elem.get('name', '')}' cannot be converted to FOX; "
+                f"Standalone DPW '{elem.get('name', '')}' cannot be converted to COSYScript; "
                 f"emitting as drift of length {elem['length']}"
             )
             if elem["length"] > 0:
@@ -265,7 +270,7 @@ def _generate_lattice_body(elements, G, r, comments, emit_fc=True):
 
 
 def _dipole_fox(elem, comment="", emit_fc=True):
-    """Generate FOX lines for a consolidated dipole."""
+    """Generate COSYScript lines for a consolidated dipole."""
     lines = []
     angle = elem["angle"]
     d_half = elem["pole_gap"] / 2
@@ -314,7 +319,7 @@ def _format_enge(coeffs):
 
 
 # ---------------------------------------------------------------------------
-# FOX template
+# COSYScript template
 # ---------------------------------------------------------------------------
 
 # Particles with dedicated COSY preset procedures.
@@ -349,7 +354,7 @@ _PARTICLE_GENERIC = {
 
 
 def _particle_command(particle, ke):
-    """Return the FOX command string to set the reference particle."""
+    """Return the COSYScript command string to set the reference particle."""
     name = particle.lower()
     if name in _PARTICLE_PRESETS:
         cmd, charge = _PARTICLE_PRESETS[name]

@@ -173,7 +173,7 @@ Elements are composed using `line:` references, `inherit:` overrides, and `repea
 
 ## Supported element types
 
-| PALS kind | FOX command | Notes |
+| PALS kind | COSYScript command | Notes |
 |-----------|-------------|-------|
 | `Quadrupole` | `MQ L Bn1 r ;` | Bn1 from `MagneticMultipoleP` |
 | `Sextupole` | `MH L Bn2 r ;` | Bn2 from `MagneticMultipoleP`; drift if absent |

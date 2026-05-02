@@ -1,6 +1,6 @@
 # Element mapping
 
-This page documents the FOX commands generated for each element type.
+This page documents the COSYScript commands generated for each element type.
 
 ## Drift
 
@@ -120,7 +120,7 @@ FC is not emitted for FR 0 (no fringe) or FR 2 (symplectic scaling).
 
 ## Summary table
 
-| Element | FOX | Notes |
+| Element | COSYScript | Notes |
 |---------|-----|-------|
 | Drift | `DL L ;` | |
 | Quadrupole (Bn1) | `MQ L Bn1 r ;` | |

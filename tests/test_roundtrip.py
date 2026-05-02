@@ -1,4 +1,4 @@
-"""Round-trip validation: PALS YAML → FOX → COSY → Twiss comparison.
+"""Round-trip validation: PALS YAML → COSYScript → COSY → Twiss comparison.
 
 Uses the FODO cell example (which is periodic, so GT can find a fixed point)
 to validate the full pals2cosy → COSY pipeline.
@@ -27,7 +27,7 @@ COSY_FOX = "/usr/local/bin/cosy.fox"
 
 
 def _run_cosy(fox_code, timeout=120):
-    """Run COSY INFINITY on FOX code, return parsed result.txt."""
+    """Run COSY INFINITY on COSYScript, return parsed result.txt."""
     with tempfile.TemporaryDirectory(prefix="pals2cosy_test_") as tmpdir:
         fox_path = os.path.join(tmpdir, "input.fox")
         with open(fox_path, "w") as f:
@@ -70,7 +70,7 @@ class TestFODORoundTrip:
 
     @pytest.fixture(autouse=True)
     def setup(self):
-        """Generate FOX from FODO PALS example.
+        """Generate COSYScript from FODO PALS example.
 
         Uses quad_aperture=1.0 m (bore diameter) to give a stable cell.
         With Bn1=1.0 T and R=0.5 m: G=2 T/m, f≈2.83 m at 1 GeV proton.

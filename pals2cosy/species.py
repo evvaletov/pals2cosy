@@ -28,34 +28,34 @@ class Species:
     name: str
     mass_mev: float
     charge: int
-    cosy_preset: Optional[str] = None
     anomalous_moment: Optional[float] = None
 
     def cosy_command(self, kinetic_energy_mev):
-        """COSYScript command setting this species as the reference particle."""
-        ke = kinetic_energy_mev
-        if self.cosy_preset == "RPPI":
-            return f"RPPI {ke} {self.charge}"
-        if self.cosy_preset:
-            return f"{self.cosy_preset} {ke}"
-        return f"RP {ke} {self.mass_mev / AMU_MEV_COSY} {self.charge}"
+        """COSYScript command setting this species as the reference particle.
+
+        Always ``RP`` with the PALS mass rather than COSY's presets (``RPP``,
+        ``RPE``, ...), whose built-in masses differ from CODATA 2018 by 1e-7 to
+        1.5e-6 and would make COSY's reference rigidity disagree with the one
+        used to turn normalized strengths into fields.
+        """
+        return f"RP {kinetic_energy_mev} {self.mass_mev / AMU_MEV_COSY} {self.charge}"
 
 
 # Canonical OpenPMD names, then aliases accepted for compatibility.
 _ELEMENTARY = {
-    "electron": Species("electron", E0_ELECTRON, -1, "RPE", 1.15965218128e-3),
-    "positron": Species("positron", E0_ELECTRON, +1, None, 1.15965218128e-3),
-    "muon": Species("muon", E0_MUON, -1, "RPMU", 1.16592089e-3),
-    "anti-muon": Species("anti-muon", E0_MUON, +1, None, 1.16592089e-3),
+    "electron": Species("electron", E0_ELECTRON, -1, 1.15965218128e-3),
+    "positron": Species("positron", E0_ELECTRON, +1, 1.15965218128e-3),
+    "muon": Species("muon", E0_MUON, -1, 1.16592089e-3),
+    "anti-muon": Species("anti-muon", E0_MUON, +1, 1.16592089e-3),
     "tau": Species("tau", E0_TAU, -1),
     "anti-tau": Species("anti-tau", E0_TAU, +1),
-    "proton": Species("proton", E0_PROTON, +1, "RPP", 1.79284734463),
-    "anti-proton": Species("anti-proton", E0_PROTON, -1, None, 1.79284734463),
+    "proton": Species("proton", E0_PROTON, +1, 1.79284734463),
+    "anti-proton": Species("anti-proton", E0_PROTON, -1, 1.79284734463),
     "neutron": Species("neutron", E0_NEUTRON, 0),
     "anti-neutron": Species("anti-neutron", E0_NEUTRON, 0),
-    "pion+": Species("pion+", E0_PION_CHARGED, +1, "RPPI", 0.0),
-    "pion-": Species("pion-", E0_PION_CHARGED, -1, "RPPI", 0.0),
-    "deuteron": Species("deuteron", E0_DEUTERON, +1, None, -0.1429873),
+    "pion+": Species("pion+", E0_PION_CHARGED, +1, 0.0),
+    "pion-": Species("pion-", E0_PION_CHARGED, -1, 0.0),
+    "deuteron": Species("deuteron", E0_DEUTERON, +1, -0.1429873),
     "triton": Species("triton", E0_TRITON, +1),
     "helion": Species("helion", E0_HELION, +2),
     "alpha": Species("alpha", E0_ALPHA, +2),

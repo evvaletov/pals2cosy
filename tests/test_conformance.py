@@ -11,7 +11,7 @@ import yaml
 import pals2cosy
 from pals2cosy.converter import convert
 from pals2cosy.pals_parser import parse_lattice
-from tests.cosy_harness import requires_cosy, run_cosy
+from tests.cosy_harness import requires_cosy, requires_sysca, run_cosy
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "pals_examples")
 
@@ -31,10 +31,10 @@ def _vendored_yaml_files():
     return found
 
 
-def _convert(rel):
+def _convert(rel, **convert_kwargs):
     entry = MANIFEST[rel]
     bp, elements = parse_lattice(os.path.join(EXAMPLES, rel), **entry.get("options", {}))
-    return bp, elements, convert(bp, elements)
+    return bp, elements, convert(bp, elements, **convert_kwargs)
 
 
 def test_spec_commit_pinned():
@@ -76,11 +76,12 @@ def test_example_fails_with_documented_reason(rel):
 
 
 @requires_cosy
+@pytest.mark.parametrize("fr", [0, pytest.param(1, marks=requires_sysca), 3])
 @pytest.mark.parametrize("rel", CONVERTING)
-def test_example_runs_in_cosy(rel, cosy_dir):
+def test_example_runs_in_cosy(rel, fr, cosy_dir):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        bp, elements, fox = _convert(rel)
+        bp, elements, fox = _convert(rel, fringe_field_order=fr)
     result = run_cosy(fox, cosy_dir)
     assert not result.errors, result.errors
     assert result.scalars["SPOS"] == pytest.approx(sum(e["length"] for e in elements))

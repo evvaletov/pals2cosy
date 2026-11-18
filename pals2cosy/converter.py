@@ -26,6 +26,11 @@ _MULTIPOLE_TYPES = frozenset({"QPF", "QPD", "SXT", "OCT", "MULT"})
 # reproduces the thin kick to O(K L * THIN_SLICE).
 THIN_SLICE = 1e-6
 
+# COSY's CMS solenoid has tanh fringe fields of length D, which reduce its
+# focusing relative to the hard-edge PALS solenoid by about D/L. Below this
+# ratio the difference is not reported.
+SOLENOID_FRINGE_TOLERANCE = 1e-3
+
 _MM_NORMAL = "PALSBN"
 _MM_SKEW = "PALSBS"
 _RF_VOLTAGE = "PALSRFV"
@@ -34,12 +39,13 @@ _RF_VOLTAGE = "PALSRFV"
 def convert(beam_params, elements,
             fringe_field_order=0,
             computation_order=3,
-            dimensions=3,
+            dimensions=None,
             quad_aperture=0.027,
             ke_override=None,
             particle_override=None,
             comments=True,
-            twiss=False):
+            twiss=False,
+            solenoid_fringe=None):
     """Convert parsed lattice to COSY INFINITY COSYScript.
 
     Parameters
@@ -52,11 +58,12 @@ def convert(beam_params, elements,
         FR command value (0, 1, 2, or 3).
     computation_order : int
         DA computation order (OV).
-    dimensions : int
-        Phase-space dimensions (2 or 3).
+    dimensions : int or None
+        Phase-space dimensions (2 or 3). Default: 3, or 2 with ``twiss``.
     quad_aperture : float
         Multipole bore diameter in meters. Its radius is the aperture at which
-        COSY's pole-tip fields are specified.
+        COSY's pole-tip fields are specified, and the half-gap of bends that
+        give no ``ApertureP`` when fringe fields are on.
     ke_override : float or None
         Override kinetic energy from lattice file.
     particle_override : str or None
@@ -65,6 +72,9 @@ def convert(beam_params, elements,
         Include element name comments in COSYScript.
     twiss : bool
         Append GT Twiss extraction and JSON output (requires periodic lattice).
+    solenoid_fringe : float or None
+        Fringe-field length [m] of COSY's soft-edge solenoid ``CMS``. Default:
+        the bore radius ``quad_aperture / 2``.
 
     Returns
     -------
@@ -76,6 +86,10 @@ def convert(beam_params, elements,
     G = beam_params.get("quad_gradient") or G_QUAD_DEFAULT
     r = quad_aperture / 2
     source = beam_params.get("source_file", "")
+    if solenoid_fringe is None:
+        solenoid_fringe = r
+    elif not solenoid_fringe > 0:
+        raise ValueError(f"solenoid_fringe must be positive, got {solenoid_fringe}")
 
     overridden = (
         (ke_override is not None and ke_override != beam_params.get("kinetic_energy_mev"))
@@ -90,8 +104,15 @@ def convert(beam_params, elements,
     consolidated = _consolidate_dipoles(elements)
     # FC (Enge coefficients) are used by FR 1 (soft-edge) and FR 3 (high-precision),
     # but NOT by FR 2 (symplectic scaling, which uses SYSCA.DAT data instead).
-    writer = _LatticeWriter(G, r, comments, fringe_field_order)
+    writer = _LatticeWriter(G, r, comments, fringe_field_order, solenoid_fringe)
     body = writer.write(consolidated)
+
+    if dimensions is None:
+        dimensions = 2 if twiss else 3
+    if twiss and dimensions == 3 and not writer.needs_rf_array:
+        raise ValueError(
+            "Twiss extraction with a 3D map needs RF: without longitudinal focusing "
+            "COSY's GT cannot compute the Twiss parameters; use 2 dimensions")
 
     return _fox_template(
         source_file=source,
@@ -195,11 +216,12 @@ def pole_tip_field(bn, order, radius):
 class _LatticeWriter:
     """Generates the body of the LATTICE procedure."""
 
-    def __init__(self, G, r, comments, fringe_field_order):
+    def __init__(self, G, r, comments, fringe_field_order, solenoid_fringe):
         self.G = G
         self.r = r
         self.comments = comments
         self.fr = fringe_field_order
+        self.solenoid_fringe = solenoid_fringe
         self.emit_fc = fringe_field_order in (1, 3)
         self.needs_multipole_arrays = False
         self.needs_rf_array = False
@@ -238,14 +260,10 @@ class _LatticeWriter:
         if etype == "DIPOLE_CONSOLIDATED":
             if elem["length"] <= 0:
                 return []
-            return _dipole_fox(elem, self._comment(elem), emit_fc=self.emit_fc)
+            return _dipole_fox(elem, self._half_gap(elem), self._comment(elem),
+                               emit_fc=self.emit_fc)
         if etype == "SOL":
-            if elem["length"] <= 0:
-                return []
-            bz = elem.get("bz")
-            if bz is None:
-                return self._drift(elem)
-            return [f"    CMS {bz} {self.r} {elem['length']} ;{self._comment(elem)}"]
+            return self._solenoid(elem)
         if etype == "RFC":
             return self._rf(elem)
         if etype == "UND":
@@ -254,7 +272,8 @@ class _LatticeWriter:
             # Lone DPW not part of a triplet — emit as drift with warning
             warnings.warn(
                 f"Standalone DPW '{elem.get('name', '')}' cannot be converted to COSYScript; "
-                f"emitting as drift of length {elem['length']}"
+                f"emitting as drift of length {elem['length']}",
+                PALSConversionWarning,
             )
             return self._drift(elem)
         warnings.warn(
@@ -263,6 +282,35 @@ class _LatticeWriter:
             PALSConversionWarning,
         )
         return self._drift(elem)
+
+    def _half_gap(self, elem):
+        half_gap = (elem.get("pole_gap") or 0.0) / 2
+        if half_gap == 0 and self.fr > 0:
+            warnings.warn(
+                f"Bend '{elem.get('name', '')}' gives no pole gap (ApertureP.y_width); "
+                f"its fringe field uses the bore radius {self.r} m as the half-gap",
+                PALSConversionWarning,
+            )
+            half_gap = self.r
+        return half_gap
+
+    def _solenoid(self, elem):
+        length = elem["length"]
+        bz = elem.get("bz")
+        if length <= 0:
+            return []
+        if bz is None:
+            return self._drift(elem)
+        fringe = self.solenoid_fringe
+        if self.fr == 0 and fringe / length > SOLENOID_FRINGE_TOLERANCE:
+            warnings.warn(
+                f"Solenoid '{elem.get('name', '')}': COSY's CMS has tanh fringe fields "
+                f"of length {fringe} m, so its focusing is about {fringe / length:.2%} "
+                f"weaker than the hard-edge solenoid; a shorter --solenoid-fringe "
+                f"reduces the difference at the cost of integration time",
+                PALSConversionWarning,
+            )
+        return [f"    CMS {bz} {fringe} {length} ;{self._comment(elem)}"]
 
     def _multipole(self, elem):
         thin = bool(elem.get("thin"))
@@ -350,15 +398,15 @@ class _LatticeWriter:
                 f"Wiggler '{elem.get('name', '')}': period must be positive, "
                 f"got {period}"
             )
-        k = 2 * math.pi / period
-        return [f"    WI {bw} {k} {elem['length']} {self.r} 0 0 0 ;{self._comment(elem)}"]
+        # WI B0 lambda L d k I A: COSY takes the period lambda, not 2 pi / lambda.
+        return [f"    WI {bw} {period} {elem['length']} {self.r} 0 0 0 ;"
+                f"{self._comment(elem)}"]
 
 
-def _dipole_fox(elem, comment="", emit_fc=True):
-    """Generate COSYScript lines for a consolidated dipole."""
+def _dipole_fox(elem, d_half, comment="", emit_fc=True):
+    """Generate COSYScript lines for a consolidated dipole of half-gap ``d_half``."""
     lines = []
     angle = elem["angle"]
-    d_half = elem["pole_gap"] / 2
     e1 = elem["entrance_angle"]
     e2 = elem["exit_angle"]
     h1 = elem.get("entrance_curvature", 0.0) or 0
@@ -408,7 +456,8 @@ def _format_enge(coeffs):
     if len(coeffs) > 6:
         warnings.warn(
             f"Enge coefficients truncated from {len(coeffs)} to 6 "
-            f"(COSY INFINITY FC accepts max 6)"
+            f"(COSY INFINITY FC accepts max 6)",
+            PALSConversionWarning,
         )
     padded = (list(coeffs) + [0.0] * 6)[:6]
     return " ".join(str(float(c)) for c in padded)

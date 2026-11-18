@@ -9,8 +9,12 @@ import warnings
 import pytest
 
 from pals2cosy._elements import blank_element
+from pals2cosy.constants import (
+    AMU_MEV_COSY, E0_ELECTRON, E0_MUON, E0_PION_CHARGED, E0_PROTON,
+)
 from pals2cosy.parser import parse_lattice
 from pals2cosy.converter import convert, _consolidate_dipoles, _format_enge
+from pals2cosy.diagnostics import PALSConversionWarning
 
 R = 0.0135  # default bore radius (quad_aperture / 2)
 
@@ -59,15 +63,28 @@ def test_fox_variables_no_twiss(fox_output):
 def test_fox_variables_with_twiss():
     bp, elems = parse_lattice(UHFEL_YAML)
     fox = convert(bp, elems, ke_override=40, twiss=True)
-    assert "VARIABLE A0 100 3" in fox
-    assert "VARIABLE F0 100 6" in fox
+    assert "OV 3 2 0 ;" in fox
+    assert "VARIABLE A0 100 2" in fox
+    assert "VARIABLE F0 100 4" in fox
     assert "GT MAP F0 MU0 A0 B0 G0 R0 ;" in fox
     assert '"beta_x"' in fox
 
 
+def test_twiss_3d_needs_rf():
+    """GT cannot compute Twiss parameters of a 3D map without RF focusing."""
+    bp = {"kinetic_energy_mev": 40, "particle_type": "electron", "source_file": "t"}
+    drift = {"type": "DRIFT", "name": "d", "length": 1.0}
+    with pytest.raises(ValueError, match="needs RF"):
+        convert(bp, [drift], twiss=True, dimensions=3)
+    cavity = {"type": "RFC", "name": "c", "length": 0.2, "rf_voltage_kv": 100.0,
+              "rf_frequency_hz": 1.3e9, "rf_phase_deg": 0.0}
+    fox = convert(bp, [drift, cavity], twiss=True, dimensions=3)
+    assert "OV 3 3 0 ;" in fox and "VARIABLE F0 100 6" in fox
+
+
 def test_fox_settings(fox_output):
     assert "OV 3 3 0 ;" in fox_output
-    assert "RPE 40 ;" in fox_output
+    assert _rp_mass_charge(fox_output, 40) == (pytest.approx(E0_ELECTRON / AMU_MEV_COSY), -1)
     assert "FR 0 ;" in fox_output
 
 
@@ -300,19 +317,19 @@ def test_undulators_as_drifts(fox_output):
 def test_override_ke():
     bp, elems = parse_lattice(UHFEL_YAML)
     fox = convert(bp, elems, ke_override=35)
-    assert "RPE 35 ;" in fox
+    assert _rp_mass_charge(fox, 35)[1] == -1
 
 
 def test_particle_electron_default():
     bp, elems = parse_lattice(UHFEL_YAML)
     fox = convert(bp, elems, ke_override=40)
-    assert "RPE 40 ;" in fox
+    assert _rp_mass_charge(fox, 40) == (pytest.approx(E0_ELECTRON / AMU_MEV_COSY), -1)
 
 
 def test_particle_proton_override():
     bp, elems = parse_lattice(UHFEL_YAML)
     fox = convert(bp, elems, ke_override=250, particle_override="proton")
-    assert "RPP 250 ;" in fox
+    assert _rp_mass_charge(fox, 250) == (pytest.approx(E0_PROTON / AMU_MEV_COSY), 1)
 
 
 def test_comments_enabled(fox_output):
@@ -365,7 +382,7 @@ def test_fodo_fox():
     fodo_file = os.path.join(EXAMPLES_DIR, "fodo.pals.yaml")
     bp, elems = parse_pals(fodo_file, ke_override=1000, particle_override="proton")
     fox = convert(bp, elems, ke_override=1000, particle_override="proton")
-    assert "RPP 1000 ;" in fox
+    assert _rp_mass_charge(fox, 1000) == (pytest.approx(E0_PROTON / AMU_MEV_COSY), 1)
     mq_lines = _extract_commands(fox, r'MQ')
     # 6 quads (2 per cell × 3 cells)
     assert len(mq_lines) == 6
@@ -460,7 +477,8 @@ def test_lone_dpw_fox_output():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         fox = convert(bp, elements)
-    assert any("Standalone DPW" in str(warning.message) for warning in w)
+    assert any("Standalone DPW" in str(warning.message)
+               and warning.category is PALSConversionWarning for warning in w)
     dl_lines = _extract_commands(fox, r'DL')
     # Both the DPW-as-drift and the actual drift should appear
     assert len(dl_lines) == 2
@@ -473,7 +491,8 @@ def test_enge_truncation_warning():
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
         result = _format_enge(coeffs)
-    assert any("truncated" in str(warning.message) for warning in w)
+    assert any("truncated" in str(warning.message)
+               and warning.category is PALSConversionWarning for warning in w)
     # Still produces 6 values
     assert len(result.split()) == 6
 
@@ -499,29 +518,29 @@ def test_enge_empty():
 # --- Phase 2A: Robustness edge case tests ---
 
 def test_muon_particle():
-    """Muon particle type generates RPMU command."""
+    """Muon: RP with the CODATA mass and charge -1."""
     bp = {"kinetic_energy_mev": 200, "particle_type": "muon",
           "quad_gradient": 2.694, "source_file": "test"}
     elements = [{"type": "DRIFT", "name": "", "length": 0.5,
                  "s_start": 0.0, "s_end": 0.5}]
     fox = convert(bp, elements, particle_override="muon")
-    assert "RPMU 200 ;" in fox
+    assert _rp_mass_charge(fox, 200) == (pytest.approx(E0_MUON / AMU_MEV_COSY), -1)
 
 
 def test_pion_particle():
-    """Pion particle type generates RPPI command with charge."""
+    """Charged pions: RP with the pion mass and the sign of the charge."""
     bp = {"kinetic_energy_mev": 300, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
     elements = [{"type": "DRIFT", "name": "", "length": 0.5,
                  "s_start": 0.0, "s_end": 0.5}]
     fox = convert(bp, elements, particle_override="pion+")
-    assert "RPPI 300 1 ;" in fox
+    assert _rp_mass_charge(fox, 300) == (pytest.approx(E0_PION_CHARGED / AMU_MEV_COSY), 1)
     fox2 = convert(bp, elements, particle_override="pi-")
-    assert "RPPI 300 -1 ;" in fox2
+    assert _rp_mass_charge(fox2, 300)[1] == -1
 
 
-def test_antimuon_uses_rp_not_rpmu():
-    """μ⁺ must use generic RP with charge +1, not RPMU which hardcodes charge -1."""
+def test_antimuon_has_positive_charge():
+    """μ⁺ is RP with charge +1 (COSY's RPMU preset would hardcode -1)."""
     bp = {"kinetic_energy_mev": 200, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
     elements = [{"type": "DRIFT", "name": "", "length": 0.5,
@@ -562,8 +581,8 @@ def test_particle_case_insensitive():
                  "s_start": 0.0, "s_end": 0.5}]
     fox1 = convert(bp, elements, particle_override="Electron")
     fox2 = convert(bp, elements, particle_override="PROTON")
-    assert "RPE 40 ;" in fox1
-    assert "RPP 40 ;" in fox2
+    assert _rp_mass_charge(fox1, 40)[1] == -1
+    assert _rp_mass_charge(fox2, 40) == (pytest.approx(E0_PROTON / AMU_MEV_COSY), 1)
 
 
 def test_unknown_particle_raises():
@@ -730,7 +749,6 @@ def test_multipole_without_harmonics():
 
 def test_wiggler_with_field():
     """Wiggler with peak field and period generates WI command."""
-    import math
     elements = [
         {"type": "UND", "name": "U1", "length": 2.0,
          "s_start": 0.0, "s_end": 2.0,
@@ -745,8 +763,8 @@ def test_wiggler_with_field():
     bp = {"kinetic_energy_mev": 40, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
     fox = convert(bp, elements)
-    expected_k = 2 * math.pi / 0.05
-    assert f"WI 0.8 {expected_k} 2.0 0.0135 0 0 0 ;" in fox
+    # COSY's WI takes the period, not the wavenumber 2 pi / period.
+    assert "WI 0.8 0.05 2.0 0.0135 0 0 0 ;" in fox
 
 
 def test_wiggler_without_field():
@@ -889,3 +907,56 @@ def test_quad_gradient_none():
     parts = mq_lines[0].split()
     expected = -2.694 * 1.5 * 0.0135
     assert float(parts[2]) == pytest.approx(expected)
+
+
+# --- Bends without a pole gap, solenoid fringe length ------------------------
+
+def _bend_only(pole_gap):
+    elem = blank_element("DPH", "b", 1.0)
+    elem.update(angle=10.0, dipole_length=1.0, pole_gap=pole_gap)
+    return [elem]
+
+
+_BP = {"kinetic_energy_mev": 40, "particle_type": "electron", "source_file": "t"}
+
+
+def _dil_gap(fox):
+    return float(_extract_commands(fox, r"DIL")[0].split()[3])
+
+
+@pytest.mark.parametrize("fr", [1, 2, 3])
+def test_bend_without_gap_uses_bore_radius_with_fringe_fields(fr):
+    # COSY divides by the half-gap at FR 3 and gives a zero-extent fringe
+    # at FR 1 and 2, so an unknown gap falls back to the bore radius.
+    with pytest.warns(PALSConversionWarning, match="no pole gap"):
+        fox = convert(_BP, _bend_only(None), fringe_field_order=fr)
+    assert _dil_gap(fox) == R
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _dil_gap(convert(_BP, _bend_only(0.04), fringe_field_order=fr)) == 0.02
+
+
+def test_bend_without_gap_at_fr0_is_silent():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _dil_gap(convert(_BP, _bend_only(None))) == 0.0
+
+
+def _solenoid_only(length=0.5):
+    elem = blank_element("SOL", "s", length)
+    elem["bz"] = 2.0
+    return [elem]
+
+
+def test_solenoid_fringe_option():
+    with pytest.warns(PALSConversionWarning, match=r"2\.70% weaker"):
+        fox = convert(_BP, _solenoid_only())
+    assert "CMS 2.0 0.0135 0.5 ;" in fox
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fox = convert(_BP, _solenoid_only(), solenoid_fringe=1e-4)
+        assert "CMS 2.0 0.0001 0.5 ;" in fox
+        # With fringe fields on, COSY's soft edge is the intended fringe model.
+        convert(_BP, _solenoid_only(), fringe_field_order=1)
+    with pytest.raises(ValueError, match="solenoid_fringe"):
+        convert(_BP, _solenoid_only(), solenoid_fringe=0.0)

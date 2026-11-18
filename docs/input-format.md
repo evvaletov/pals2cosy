@@ -46,7 +46,8 @@ PALS:
 The branch converted is the first branch of the Lattice named by the last
 `use` statement (or of the last Lattice); `--beamline` picks another branch or
 any BeamLine. A negative `repeat` reverses the order of the repeated elements
-without reversing their direction.
+without reversing their direction. A BeamLine `length` longer than its items
+leaves a field-free gap at its end.
 
 ### Reference particle
 

@@ -20,6 +20,29 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
   frame (`sign(θ)·e`); a rectangular negative bend previously received the
   wrong edge focusing.
 - `carbon12` used the neutral-atom mass for the bare nucleus.
+- **Wigglers.** COSY's `WI` takes the period λ as its second argument; earlier
+  releases passed the wavenumber 2π/λ, so COSY modelled a nearly uniform
+  dipole (horizontal dipole focusing, no vertical wiggler focusing, a path
+  length longer than the element).
+- Bends without `ApertureP` gave COSY a half-gap of 0: `--fr 3` stopped with
+  a division by zero, and `--fr 1`/`2` silently produced a hard edge. With
+  fringe fields on, the bore radius (`--quad-aperture / 2`) is now used, with
+  a warning.
+- The reference particle is always set with `RP` and the PALS (CODATA 2018)
+  mass. The masses of COSY's presets `RPP`, `RPE`, `RPMU` and `RPPI` differ
+  from it by 1e-7 (proton, electron) to 1.5e-6 (pion), so COSY's reference
+  rigidity disagreed with the one normalized strengths were converted with
+  (by 2.7e-6 in the IOTA one-turn map).
+- `--twiss` uses a 2D map unless `--dim 3` is given, which needs RF; COSY's
+  `GT` cannot handle the longitudinal plane of a 3D map without RF.
+- RF `dE_ref` with zero or absent voltage now changes the PALS reference
+  energy (it was ignored without a voltage) and warns that COSY's reference
+  does not follow, as for a cavity whose crest gain differs from `dE_ref`.
+- Failed powers in expressions (a negative base with a fractional exponent,
+  overflow, `0^-1`) are conversion errors instead of tracebacks.
+- Warnings about standalone flat-format wedges (`DPW`), truncated Enge
+  coefficients and an ignored `--beamline` are `PALSConversionWarning`s, so
+  `--strict` catches them.
 
 ### Added
 - `kind: Bend` with BendP two-of-three resolution ({`g_ref`, `Bn0_ref`,
@@ -43,6 +66,19 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
 - Negative `repeat` (reversed element order, per the specification without
   direction reversal); in-place Lattice branches; facility-level and
   parameter-group `inherit`; `use` of the last Lattice by default.
+- BeamLine `length`, also as a line-item override: a field-free drift fills
+  the BeamLine up to its declared length (at the front when a negative repeat
+  reverses it); a length shorter than the items raises
+  `UnsupportedFeatureError`.
+- `ReferenceChange` `dtime_ref` and `time_ref` enter the branch reference time
+  that `harmonic_number` refers to; a `ReferenceChange` keeps its length.
+- `Inf` and `-Inf` in expressions; `random()` and `random_gauss()` are drawn
+  once per facility definition, so all instances of an element share a value;
+  `nint` rounds halves away from zero; a constant or variable may be defined
+  again with an equal value written differently (`2*pi`, `twopi`).
+- `--solenoid-fringe`: the fringe-field length of COSY's soft-edge solenoid
+  `CMS`, which defaults to the bore radius. At `--fr 0` a warning gives the
+  resulting focusing deficit relative to the hard-edge solenoid (about D/L).
 - `PALS.version` check (unknown major versions warn), `extension_labels`,
   `reminders`.
 - Explicit handling of everything not converted: `UnsupportedFeatureError`
@@ -50,18 +86,28 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
   superposition, `placement`, direction reversal, offset `Patch`es and
   reference-energy changes; `PALSConversionWarning` for forks, extra
   branches, multipass lines, adjustments, RELATIVE controllers, girders,
-  misalignments, electric multipoles, kicks, unknown keys and kinds, and
-  elements without a readable strength.
+  misalignments, electric multipoles, kicks, multipole fields on elements
+  that do not convert them, unknown keys and kinds (including unknown
+  components of the parameter groups pals2cosy reads), and elements without a
+  readable strength. `include` is rejected at any level of the document, and
+  extension blocks (`name: {extension: type, ...}`) are passed over at any
+  level. A branch whose first element is not its `BeginningEle` warns.
 - `--strict` (conversion warnings become errors) and `--version`; the CLI
   reports conversion errors as one line with exit status 1.
 - Conformance suite: the PALS `examples/` tree at the pinned commit in
-  `tests/pals_examples/` with a manifest of expected outcomes, plus tests that
-  compare COSY INFINITY transfer maps with the PALS element definitions.
+  `tests/pals_examples/` with a manifest of expected outcomes, run in COSY
+  INFINITY at `FR 0`, `1` and `3`, plus tests that compare COSY transfer maps
+  with the PALS element definitions. The COSY harness checks COSY's exit
+  status and Fortran runtime errors and supplies `SYSCA.DAT`
+  (`PALS2COSY_COSY_SYSCA`) for `FR 1` and `2`.
 
 ### Changed (breaking)
 - Internal element dicts carry `bn`/`bs` (PALS coefficients in T/m^N) and
   `b_pole` (flat-format pole-tip fields) instead of `bn1`–`bn5`.
 - An unknown reference species is an error instead of a proton-mass fallback.
+- A `FloorShift` must have zero length, like a `Marker`.
+- `convert()` takes `dimensions=None` (3, or 2 with `twiss`) and
+  `solenoid_fringe`; `Species` no longer has a `cosy_preset` field.
 - Without a `use` statement the last Lattice is converted (previously the
   last BeamLine), as the specification prescribes.
 - `BeginningEle` and `Placeholder` no longer appear in the element list.
@@ -97,9 +143,8 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
   message instead of raw `KeyError`/`TypeError`.
 
 ### Documentation
-- Replaced "FOX" with "COSYScript" or "COSY INFINITY input" throughout
-  user-visible text. COSYScript is the official COSY INFINITY domain-specific
-  language; "FOX" is a `.fox`-extension shorthand, not an official name.
+- User-visible text now calls the language COSYScript or COSY INFINITY input
+  throughout, replacing the informal name derived from the `.fox` extension.
 
 ## [0.4.0] — 2026-03-21
 

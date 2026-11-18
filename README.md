@@ -54,9 +54,10 @@ pals2cosy lattice.pals.yaml --strict
 | `--particle STR` | from lattice | Reference species (see [Reference particle](#reference-particle)) |
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
-| `--dim INT` | 3 | Phase-space dimensions (2 or 3) |
+| `--dim INT` | 3 (2 with `--twiss`) | Phase-space dimensions (2 or 3) |
 | `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius |
-| `--twiss` | off | Append GT Twiss extraction (requires periodic lattice) |
+| `--solenoid-fringe FLOAT` | bore radius | Fringe-field length (m) of COSY's soft-edge solenoid (see [Solenoids](#element-mapping)) |
+| `--twiss` | off | Append GT Twiss extraction (requires periodic lattice; a 3D map also needs RF) |
 | `--beamline NAME` | first branch | Lattice branch or BeamLine to expand (official PALS only) |
 | `--strict` | off | Turn conversion warnings into errors |
 | `--mode STR` | auto | Input format override |
@@ -113,19 +114,28 @@ beamline excerpt.
   last Lattice), `BeamLine` with in-place definitions, element and line
   `inherit`, parameter-group `inherit` (named groups and `element>Group`),
   `repeat` (a negative repeat reverses the element order without direction
-  reversal, so a Bend keeps `e1` on its upstream face).
+  reversal, so a Bend keeps `e1` on its upstream face), and BeamLine `length`
+  (a drift fills the line up to its declared length; a shorter length, which
+  would make line items overlap, raises `UnsupportedFeatureError`).
+- **Extensions:** extension blocks (`name: {extension: type, ...}`) at any
+  level and the names, prefixes and suffixes declared in `extension_labels`
+  are passed over silently.
 - **Values:** constants and variables (`constants:`/`variables:` lists and
-  `kind: constant`/`variable`), arithmetic expressions in any numeric field
-  (`+ - * / ^ **`, parentheses, unary signs), the PALS constants (`pi`,
-  `twopi`, `c_light`, `r_electron`, ...), the PALS functions (`sqrt`, `exp`,
-  `log`, trigonometric and hyperbolic functions, `atan2`, `abs`, `factorial`,
+  `kind: constant`/`variable`; a repeated definition must have the same
+  value), arithmetic expressions in any numeric field (`+ - * / ^ **`,
+  parentheses, unary signs, `Inf`), the PALS constants (`pi`, `twopi`,
+  `c_light`, `r_electron`, ...), the PALS functions (`sqrt`, `exp`, `log`,
+  trigonometric and hyperbolic functions, `atan2`, `abs`, `factorial`,
   `int`, `nint`, `floor`, `ceiling`, `modulo`, `sign`, `mass_of`,
   `charge_of`, `anomalous_moment_of`, `random`, `random_gauss`, `expr`), and
-  element parameter references (`Q1>MagneticMultipoleP.Kn1`). Expressions are
-  parsed by a small recursive-descent evaluator; Python `eval` is never used.
+  element parameter references (`Q1>MagneticMultipoleP.Kn1`). Random values
+  are drawn once per facility definition, so every instance of an element
+  shares them. Expressions are parsed by a small recursive-descent
+  evaluator; Python `eval` is never used.
 - **Reference particle:** `ReferenceP` of the branch's `BeginningEle`
-  (`species_ref`, `E_tot_ref` or `pc_ref`), with reference-energy changes
-  through RF `dE_ref`.
+  (`species_ref`, `E_tot_ref` or `pc_ref`, `time_ref`), with
+  reference-energy changes through RF `dE_ref` and reference-time changes
+  through `ReferenceChange` (`dtime_ref`, `time_ref`).
 - **Elements:** see the mapping below.
 
 ## Element mapping
@@ -154,11 +164,12 @@ which COSY is told the field, not the gradient.
 | skew components, tilts, or orders 6–10 | `MMS L PALSBN PALSBS NB r ;` | `(BnN' + i BsN') = (BnN + i BsN)·exp(−i(N+1)·tiltN)` |
 | zero-length multipole with `BnNL`/`KnNL` | `DL −ε/2 ; M.. ε … ; DL −ε/2 ;` | thin kick, ε = 1 µm, local `FR 0` |
 | `Bend` | `[RA τ ;] [CB ;] DIL L abs(θ) d e1 h1 e2 h2 ; [CB ;] [RA −τ ;]` | see below |
-| `Solenoid` | `CMS Bsol r L ;` | `Bsol = Ksol·Bρ` |
+| `Solenoid` | `CMS Bsol D L ;` | `Bsol = Ksol·Bρ`; soft edge, see below |
 | `RFCavity` | `DL L/2 ; RF PALSRFV 0 f φ r ; DL L/2 ;` | see below |
-| `Wiggler` (pals2cosy `WigglerP`) | `WI B 2π/period L r 0 0 0 ;` | |
-| `Kicker`, `Instrument` | `DL L ;` | a nonzero kick warns |
+| `Wiggler` (pals2cosy `WigglerP`) | `WI B period L r 0 0 0 ;` | |
+| `Kicker`, `Instrument`, `Drift` | `DL L ;` | a nonzero kick or multipole field warns |
 | `Marker`, `Fiducial`, `Fork`, `FloorShift`, `BeginningEle`, `Placeholder` | — | zero-length bookkeeping |
+| `ReferenceChange` | `DL L ;` if it has a length | reference-time changes only |
 
 **Bends.** The arc length `L`, curvature `g` and angle `θ` are resolved from
 any two of the three BendP sets {`g_ref`, `Bn0_ref` = `g_ref`·Bρ,
@@ -173,7 +184,18 @@ emitted as `sign(θ)·e` (a rectangular bend has `e1 = e2 = abs(θ)/2` in COSY f
 either sign). Face curvatures `h1`, `h2` map to the DIL curvature arguments
 (positive is convex in both codes). `tilt_ref` rotates the bend about the
 entrance axis and is emitted as `RA` rotations (degrees) around it. The
-half-gap `d` is half of `ApertureP.y_width` (or `y_max − y_min`).
+half-gap `d` is half of `ApertureP.y_width` (or `y_max − y_min`). It sets the
+extent of the fringe field; when it is not given and `--fr` is 1–3, the bore
+radius (`--quad-aperture / 2`) is used with a warning.
+
+**Solenoids.** COSY INFINITY's `CMS` solenoid always has soft edges,
+`B(s) ∝ tanh(s/D) − tanh((s − L)/D)` with fringe length `D`, while the PALS
+solenoid is hard-edged. The rotation is the same, but the focusing integral
+`∫B² ds` is smaller by about `D·B²`, so the focusing is weaker by about
+`D/L`. `D` is `--solenoid-fringe`, which defaults to the bore radius. At
+`--fr 0` a warning gives the deficit whenever it exceeds 0.1%; a shorter
+`--solenoid-fringe` approaches the hard-edge map, at the cost of COSY
+integration time (a few seconds per solenoid for `D = 10⁻⁴ m`).
 
 **RF cavities.** COSY's `RF` is a thin kick, so it is placed between two
 drifts of half the cavity length. The voltage is `RFP.voltage` (or
@@ -184,17 +206,25 @@ transit time of the converted branch. COSY gives the reference particle
 `φ = phase [deg] + 90 (ACCELERATING) | 0 (BELOW_TRANSITION) | 180 (ABOVE_TRANSITION)`,
 plus 180 for a negatively charged reference. COSY then re-references the
 energy to that gain; if it differs from `RFP.dE_ref` (PALS default 0) a
-warning says so. The reference energy used for normalized strengths
-downstream follows `dE_ref`, as in PALS.
+warning says so; the same holds for a cavity with zero or no voltage but a
+nonzero `dE_ref`. The reference energy used for normalized strengths
+downstream follows `dE_ref`, as in PALS. The RF phase of each cavity is
+taken relative to the arrival of the reference particle at that cavity,
+which is COSY's convention; this is how pals2cosy reads the
+`2π·t·frequency + phase + phi0` of the specification, which does not fix the
+origin of `t`. `harmonic_number` is converted with the branch reference time
+`t1_ref`: the straight-line transit time of the branch (the specification's
+formula) plus `ReferenceChange` time adjustments.
 
 ## Reference particle
 
 The reference particle is read from `ReferenceP` on the branch's
-`BeginningEle`: `species_ref` (or the name of a constant holding one) and
-`E_tot_ref` or `pc_ref` in eV. `--particle` and `--ke` (MeV) override them;
-with only `--particle`, the file's `E_tot_ref`/`pc_ref` is kept and the
-kinetic energy follows from the new mass. Normalized strengths are always
-resolved with the reference actually used.
+`BeginningEle`, which must be the first element of the branch (a later one
+is used with a warning): `species_ref` (or the name of a constant holding
+one) and `E_tot_ref` or `pc_ref` in eV. `--particle` and `--ke` (MeV)
+override them; with only `--particle`, the file's `E_tot_ref`/`pc_ref` is
+kept and the kinetic energy follows from the new mass. Normalized strengths
+are always resolved with the reference actually used.
 
 Species names follow PALS (OpenPMD) spelling: `electron`, `positron`,
 `proton`, `anti-proton`, `muon`, `anti-muon`, `tau`, `deuteron`, `triton`,
@@ -203,18 +233,22 @@ optional isotope and a charge state, such as `#3He+2`, `#12C+6`, `Au+79`
 (the most abundant isotope when none is given) or `H-`. Ion masses are atomic
 masses minus the removed electrons (binding energies neglected). The short
 names of earlier releases (`antiproton`, `mu+`, `antimuon`, `pi-`,
-`carbon12`, ...) still work. COSY presets are used where they exist (`RPE`,
-`RPP`, `RPMU`, `RPPI`); otherwise `RP E M Z` with the mass in COSY's atomic
-mass unit. A neutral reference species is an error.
+`carbon12`, ...) still work. Every species is set with `RP E M Z`, the
+mass in COSY's atomic mass unit, so that COSY's reference rigidity is the one
+normalized strengths were converted with; COSY's presets (`RPP`, `RPE`,
+`RPMU`, `RPPI`) carry masses that differ by up to 1.5e-6, and they also set
+the spin `G`, which a program that adds spin tracking must then set itself
+(`RPS`). A neutral reference species is an error.
 
 ## Unsupported constructs
 
 Constructs that would change the converted lattice raise
 `UnsupportedFeatureError` (a subclass of both `ValueError` and
 `NotImplementedError`): `set`/`sets`, `post_expansion`, ABSOLUTE
-`Controller`s, `include`, `load`, `superimpose`, line-item `placement`,
-direction reversal (`direction: -1`), `Patch` elements with offsets, and
-`ReferenceChange` of the energy or species.
+`Controller`s, `include` (at any level of the document), `load`,
+`superimpose`, line-item `placement`, direction reversal (`direction: -1`),
+overlapping line items (a BeamLine `length` shorter than its items), `Patch`
+elements with offsets, and `ReferenceChange` of the energy or species.
 
 Constructs that leave the converted branch intact are converted with a
 `PALSConversionWarning`: additional Lattice branches (select one with
@@ -224,8 +258,31 @@ sequences), `adjustments` (not applied), RELATIVE controllers, `girders` and
 bend dipole errors (`Kn0` differing from the reference), `edge1_int`/`edge2_int`
 (COSY uses its own Enge fringe model with `--fr 1–3`), kicks, RF
 `multipass_phase` and traveling-wave cavities, element kinds without a COSY
-counterpart (emitted as drifts), unknown keys, and active elements with no
-readable strength (emitted as drifts). `--strict` turns these into errors.
+counterpart (emitted as drifts), multipole fields on elements that do not
+convert them (drifts, instruments, wigglers, markers, solenoids, RF
+cavities), unknown keys, including unknown components of the parameter
+groups pals2cosy reads (`BendP`, `RFP`, `SolenoidP`, `ReferenceP`,
+`ReferenceChangeP`, `ApertureP`, `PatchP`, `ForkP`, `BodyShiftP`, the
+multipole groups), and active elements with no readable strength (emitted as
+drifts). `--strict` turns these into errors.
+
+## Leniencies and model differences
+
+Where pals2cosy is more lenient or stricter than the specification, or COSY
+INFINITY models an element differently:
+
+- `BendP` accepts a redundant parameter from the same set as long as it is
+  consistent (`g_ref` with `radius_ref`, or `e1` with `e1_rect`), although the
+  specification asks for two parameters from different sets.
+- A branch whose first element is not its `BeginningEle` takes the reference
+  particle from a later one, with a warning; a `BeginningEle` that opens a
+  subline at the start of the branch is accepted silently.
+- Solenoids are soft-edged in COSY (see [Solenoids](#element-mapping)).
+- Thin multipoles are 1 µm slices, and RF cavities thin kicks between
+  half-length drifts.
+- Negative element lengths are rejected; the specification has no such rule.
+- An RF cavity with a voltage needs `frequency` or `harmonic_number` to build
+  COSY's `RF` element; several official examples give neither.
 
 ## Deprecations
 
@@ -263,10 +320,12 @@ the commit in `tests/pals_examples/SPEC_COMMIT`, with a `manifest.yaml`
 listing for every file whether it converts or which documented error it
 raises. The suite checks that the manifest covers every example, that each
 outcome holds, and, when COSY INFINITY is installed, that every converted
-example runs in COSY with the expected total length. Further tests compare
-COSY transfer maps with the PALS definitions (multipole kicks to fifth order,
-skew and tilted quadrupoles, sector and rectangular bends of both signs, bend
-tilts, RF phase conventions, solenoids).
+example runs in COSY at `--fr 0`, `1` and `3` with the expected total length.
+Further tests compare COSY transfer maps with the PALS definitions (reference
+rigidity, multipole kicks to fifth order, skew and tilted multipoles against
+COSY's own frame rotation, bend direction and tilts, sector and rectangular
+bends of both signs, RF phase conventions, solenoids against the hard-edge
+map, wiggler focusing).
 
 ## Known limitations
 
@@ -274,6 +333,8 @@ tilts, RF phase conventions, solenoids).
   are not followed.
 - Combined-function bends, electrostatic elements and misalignments are not
   converted.
+- Solenoids are soft-edged; their focusing is weaker than the hard-edge PALS
+  solenoid by about `--solenoid-fringe / L`.
 - Enge coefficients: COSY's `FC` accepts at most 6 per fringe field; longer
   lists are truncated with a warning.
 - Flat-format quadrupoles given by current (`±G·I·r`) use an electron sign
@@ -310,4 +371,5 @@ pytest tests/ -v
 
 Tests that run COSY INFINITY are skipped when `/usr/local/bin/cosy` and
 `cosy.fox` are not found (override with `PALS2COSY_COSY_BIN` and
-`PALS2COSY_COSY_LIBRARY`).
+`PALS2COSY_COSY_LIBRARY`). The `--fr 1` runs also need COSY's `SYSCA.DAT`,
+looked for next to `cosy.fox` or given with `PALS2COSY_COSY_SYSCA`.

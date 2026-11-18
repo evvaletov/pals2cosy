@@ -68,8 +68,8 @@ def main(argv=None):
     parser.add_argument("-o", "--output", help="Output file (default: stdout)")
     parser.add_argument("--fr", type=int, default=0, help="Fringe field order (default: 0)")
     parser.add_argument("--order", type=int, default=3, help="DA computation order (default: 3)")
-    parser.add_argument("--dim", type=int, default=3, choices=[2, 3],
-                        help="Phase-space dimensions (default: 3)")
+    parser.add_argument("--dim", type=int, default=None, choices=[2, 3],
+                        help="Phase-space dimensions (default: 3, or 2 with --twiss)")
     parser.add_argument("--ke", type=float, default=None,
                         help="Override the reference kinetic energy (MeV)")
     parser.add_argument("--particle", type=str, default=None,
@@ -79,7 +79,12 @@ def main(argv=None):
                              "'#12C+6' or 'Au+79'")
     parser.add_argument("--quad-aperture", type=float, default=0.027,
                         help="Multipole bore diameter in meters; pole-tip fields are "
-                             "given at its radius (default: 0.027)")
+                             "given at its radius, which is also the half-gap of bends "
+                             "without ApertureP under --fr 1-3 (default: 0.027)")
+    parser.add_argument("--solenoid-fringe", type=float, default=None,
+                        help="Fringe-field length in meters of COSY's soft-edge "
+                             "solenoid; shorter approaches the hard-edge PALS solenoid "
+                             "but integrates more slowly (default: bore radius)")
     parser.add_argument("--no-comments", action="store_true",
                         help="Omit element name comments")
     parser.add_argument("--twiss", action="store_true",
@@ -127,7 +132,7 @@ def main(argv=None):
             warnings.simplefilter("error", PALSConversionWarning)
         try:
             fox = _convert_file(args)
-        except (ValueError, OSError, PALSConversionWarning) as exc:
+        except (ValueError, ArithmeticError, OSError, PALSConversionWarning) as exc:
             print(f"pals2cosy: error: {exc}", file=sys.stderr)
             return 1
 
@@ -163,7 +168,8 @@ def _convert_file(args):
         if args.beamline is not None:
             warnings.warn(
                 f"--beamline is only used with official-pals mode; "
-                f"ignored for mode '{mode}'"
+                f"ignored for mode '{mode}'",
+                PALSConversionWarning,
             )
         from .parser import parse_lattice
         beam_params, elements = parse_lattice(args.input, mode=mode)
@@ -178,6 +184,7 @@ def _convert_file(args):
         particle_override=args.particle,
         comments=not args.no_comments,
         twiss=args.twiss,
+        solenoid_fringe=args.solenoid_fringe,
     )
 
     return fox

@@ -1,8 +1,8 @@
 """Safe evaluation of PALS arithmetic expressions.
 
 Supports numbers, ``+ - * /``, ``^`` and ``**`` (right associative), unary
-signs, parentheses, quoted species strings, the PALS predefined constants,
-lattice constants and variables, element parameter references
+signs, parentheses, quoted species strings, ``Inf``, the PALS predefined
+constants, lattice constants and variables, element parameter references
 (``Q1>MagneticMultipoleP.Kn1``) and the function set of the PALS standard.
 No Python ``eval`` is involved: expressions are tokenized and evaluated by a
 small recursive-descent parser.
@@ -58,7 +58,8 @@ def _sign(x):
 
 
 def _nint(x):
-    return float(math.floor(x + 0.5))
+    n = math.floor(abs(x) + 0.5)
+    return float(n if x >= 0 else -n)
 
 
 def _modulo(a, p):
@@ -150,7 +151,14 @@ class _Parser:
         if self.peek()[1] == "^":
             self.take()
             exponent = _num(self.unary(), self.text)
-            return _num(base, self.text) ** exponent
+            try:
+                value = _num(base, self.text) ** exponent
+            except (OverflowError, ZeroDivisionError) as exc:
+                raise ExpressionError(f"power failed in {self.text!r}: {exc}") from exc
+            if isinstance(value, complex):
+                raise ExpressionError(
+                    f"negative number raised to a fractional power in {self.text!r}")
+            return value
         return base
 
     def atom(self):
@@ -233,6 +241,16 @@ class Scope:
             raise ExpressionError(f"cannot evaluate {raw!r}")
         return _Parser(_tokenize(raw), self, raw).parse()
 
+    def evaluate_definition(self, raw):
+        """Value of a constant or variable definition: a number or a species name
+        such as "#3He", "Au+79" or "electron"."""
+        try:
+            return self.evaluate(raw)
+        except ExpressionError:
+            if not _is_species_name(raw):
+                raise
+            return raw.strip()
+
     def lookup(self, name):
         if name in self.definitions:
             if name in self._values:
@@ -241,19 +259,16 @@ class Scope:
                 chain = " -> ".join(self._active + [name])
                 raise ExpressionError(f"circular definition: {chain}")
             self._active.append(name)
-            raw = self.definitions[name]
             try:
-                value = self.evaluate(raw)
-            except ExpressionError:
-                if not _is_species_name(raw):
-                    raise
-                value = raw.strip()
+                value = self.evaluate_definition(self.definitions[name])
             finally:
                 self._active.pop()
             self._values[name] = value
             return value
         if name in PALS_CONSTANTS:
             return PALS_CONSTANTS[name]
+        if name == "Inf":
+            return math.inf
         if name in ("PARAMETER", "SELF"):
             raise ExpressionError(f"'{name}' is only meaningful inside a set command")
         raise ExpressionError(f"undefined name '{name}'")
@@ -294,7 +309,6 @@ class Scope:
 
 
 def _is_species_name(raw):
-    """Constants may hold species names such as "#3He", "Au+79" or "electron"."""
     if not isinstance(raw, str):
         return False
     try:

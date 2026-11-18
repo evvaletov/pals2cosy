@@ -109,8 +109,8 @@ element and `s_start_m` of the next.
    appropriate COSYScript commands for each element type. Elements that need
    COSY arrays (`MMS`, `RF`) make the writer declare them at the top of the
    `LATTICE` procedure. The complete program is assembled from a template
-   that includes the lattice procedure, setup commands (`OV`,
-   `RPE`/`RPP`/`RP`/etc., `FR`), and optionally Twiss output (`--twiss`).
+   that includes the lattice procedure, setup commands (`OV`, `RP`, `FR`),
+   and optionally Twiss output (`--twiss`).
 
 ## Design decisions
 
@@ -138,9 +138,17 @@ FR 1 (soft-edge, two-step) and FR 3 (high-precision). FR 2 uses symplectic
 scaling (pre-computed data from `SYSCA.DAT`), not Enge coefficients, so FC is
 omitted. FR 0 has no fringe fields.
 
-**Particle presets.** The converter selects COSY's preset procedures where they
-exist (`RPE`, `RPP`, `RPMU`, `RPPI`), falling back to `RP` with the mass in
-COSY's own atomic mass unit, so COSY's rest energy equals the intended one.
+**Reference particle.** The converter sets every species with `RP` and the
+mass in COSY's own atomic mass unit, so COSY's rest energy, and with it the
+reference rigidity, equals the one the parser converted normalized strengths
+with. COSY's preset procedures (`RPE`, `RPP`, `RPMU`, `RPPI`) are not used:
+their built-in masses differ from CODATA 2018 by 1e-7 to 1.5e-6.
+
+**BeamLine lengths.** A BeamLine that declares `length` is bracketed by
+marks during expansion; once the element lengths are resolved (a Bend's arc
+length may follow from `L_chord`), the marks become a drift filling the line
+to its declared length. The marks travel with the items, so a negative
+repeat puts the drift at the front of the reversed line.
 
 ## Scope
 
@@ -157,7 +165,8 @@ COSY's own atomic mass unit, so COSY's rest energy equals the intended one.
 
 **Deferred:**
 - `include`/`load`, `set`, controllers, superposition, placement, direction
-  reversal, forks and multipass bookkeeping
+  reversal, overlapping line items, forks and multipass bookkeeping
+- Hard-edge solenoids (COSY's `CMS` is soft-edged)
 - Combined-function magnets (dipole + multipole fields → COSY `MC`/`MS`)
 - Electrostatic elements
 - Misalignments (`BodyShiftP`)

@@ -12,10 +12,17 @@ import pytest
 
 COSY_BIN = os.environ.get("PALS2COSY_COSY_BIN", "/usr/local/bin/cosy")
 COSY_LIBRARY = os.environ.get("PALS2COSY_COSY_LIBRARY", "/usr/local/bin/cosy.fox")
+# Fringe-field data that COSY reads for FR 1 and FR 2.
+COSY_SYSCA = os.environ.get("PALS2COSY_COSY_SYSCA",
+                            os.path.join(os.path.dirname(COSY_LIBRARY), "SYSCA.DAT"))
 
 requires_cosy = pytest.mark.skipif(
     not (os.path.exists(COSY_BIN) and os.path.exists(COSY_LIBRARY)),
     reason="COSY INFINITY binary or cosy.fox not found",
+)
+requires_sysca = pytest.mark.skipif(
+    not os.path.exists(COSY_SYSCA),
+    reason="SYSCA.DAT not found (needed by FR 1 and 2); set PALS2COSY_COSY_SYSCA",
 )
 
 _MAP_PROBE = """\
@@ -32,20 +39,25 @@ _COEFF_RE = re.compile(r"^\s*\d+\s+(\S+)\s+\d+\s+([\d ]+)$")
 
 
 def compile_cosy(workdir):
-    """Copy COSY into ``workdir`` and compile its library once."""
+    """Copy COSY (and SYSCA.DAT, if found) into ``workdir`` and compile its
+    library once."""
     shutil.copy2(COSY_BIN, os.path.join(workdir, "cosy"))
     os.chmod(os.path.join(workdir, "cosy"), 0o755)
     shutil.copy2(COSY_LIBRARY, os.path.join(workdir, "cosy.fox"))
+    if os.path.exists(COSY_SYSCA):
+        shutil.copy2(COSY_SYSCA, os.path.join(workdir, "SYSCA.DAT"))
     subprocess.run(["./cosy", "cosy.fox"], cwd=workdir, stdin=subprocess.DEVNULL,
                    capture_output=True, timeout=120, check=True)
     return workdir
 
 
 class CosyResult:
-    def __init__(self, stdout):
+    def __init__(self, stdout, stderr="", returncode=0):
         self.stdout = stdout
-        self.errors = [line for line in stdout.splitlines()
-                       if re.search(r"\*\*\* [A-Z]|\$\$\$|ERROR", line)]
+        self.errors = [line for line in (stdout + "\n" + stderr).splitlines()
+                       if re.search(r"\*\*\* [A-Z]|\$\$\$|ERROR|forrtl", line)]
+        if returncode:
+            self.errors.append(f"COSY exited with status {returncode}")
         self.scalars = {}
         self.map = []
         tag, vec = None, []
@@ -85,4 +97,4 @@ def run_cosy(script, workdir, name="probe.fox", timeout=60):
         f.write(script.replace("    LATTICE ;\n", _MAP_PROBE, 1))
     proc = subprocess.run(["./cosy", name], cwd=workdir, stdin=subprocess.DEVNULL,
                           capture_output=True, text=True, timeout=timeout)
-    return CosyResult(proc.stdout)
+    return CosyResult(proc.stdout, proc.stderr, proc.returncode)

@@ -38,7 +38,7 @@ def test_cli_auto_fodo(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     fox = out.read_text()
-    assert "RPP 1000" in fox
+    assert "RP 1000.0 1.00727656" in fox
     assert "MQ" in fox
 
 
@@ -53,7 +53,7 @@ def test_cli_auto_felsim(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     fox = out.read_text()
-    assert "RPE 40" in fox
+    assert "RP 40.0 0.00054857996" in fox
 
 
 def test_cli_explicit_mode_official_pals(tmp_path):
@@ -113,6 +113,13 @@ def test_beamline_flag_non_pals_warns(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "--beamline is only used with official-pals" in result.stderr
+    strict = subprocess.run(
+        ["python", "-m", "pals2cosy", uhfel, "-o", str(out),
+         "--ke", "40", "--beamline", "ignored", "--strict"],
+        capture_output=True, text=True
+    )
+    assert strict.returncode == 1
+    assert "--beamline is only used with official-pals" in strict.stderr
 
 
 def test_detect_format_toml(tmp_path):

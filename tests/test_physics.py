@@ -75,7 +75,7 @@ def test_total_energy_reference(convert_text):
     bp, _, fox = convert_text(_lattice("- d: {kind: Drift, length: 1.0}", "electron",
                                        "E_tot_ref: 50.51099895e6"))
     assert bp["kinetic_energy_mev"] == pytest.approx(50.0)
-    assert "RPE 50" in fox
+    assert "RP 50.0" in fox and " -1 ;" in fox
 
 
 def test_inconsistent_energy_and_momentum(pals_file):

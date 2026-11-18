@@ -2,6 +2,9 @@
 
 import pytest
 
+from pals2cosy.constants import (
+    AMU_MEV_COSY, E0_ELECTRON, E0_MUON, E0_PION_CHARGED, E0_PROTON,
+)
 from pals2cosy.expressions import ExpressionError, Scope
 from pals2cosy.species import charge_of, mass_of, parse_species
 
@@ -37,13 +40,13 @@ def test_species(name, mass_mev, charge):
     assert sp.charge == charge
 
 
-def test_species_presets():
-    assert parse_species("electron").cosy_command(40) == "RPE 40"
-    assert parse_species("proton").cosy_command(40) == "RPP 40"
-    assert parse_species("#1H+1").cosy_command(40) == "RPP 40"
-    assert parse_species("pion-").cosy_command(40) == "RPPI 40 -1"
-    assert parse_species("muon").cosy_command(40) == "RPMU 40"
-    assert parse_species("anti-muon").cosy_command(40).startswith("RP 40 ")
+def test_species_cosy_command_uses_pals_mass():
+    # RP with the CODATA mass, never COSY's presets (RPP, RPE, ...), whose
+    # masses differ at the 1e-8 level from the one Brho is computed with.
+    for name, mass, charge in (("electron", E0_ELECTRON, -1), ("proton", E0_PROTON, 1),
+                               ("#1H+1", E0_PROTON, 1), ("pion-", E0_PION_CHARGED, -1),
+                               ("muon", E0_MUON, -1), ("anti-muon", E0_MUON, 1)):
+        assert parse_species(name).cosy_command(40) == f"RP 40 {mass / AMU_MEV_COSY} {charge}"
 
 
 @pytest.mark.parametrize("name", ["tachyon", "#3Xx", "#99He+2", "He+3", "au+79", ""])

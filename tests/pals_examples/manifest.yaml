@@ -106,22 +106,22 @@ examples:
     expect: error
     error: ValueError
     match: "RFP needs frequency or harmonic_number"
-    reason: an RF cavity with voltage but no frequency cannot be modelled
+    reason: pals2cosy requires frequency or harmonic_number to build COSY's RF element
   unit_tests/elements/rf_gradient.pals.yaml:
     expect: error
     error: ValueError
     match: "RFP needs frequency or harmonic_number"
-    reason: an RF cavity with voltage but no frequency cannot be modelled
+    reason: pals2cosy requires frequency or harmonic_number to build COSY's RF element
   unit_tests/elements/rf_voltage.pals.yaml:
     expect: error
     error: ValueError
     match: "RFP needs frequency or harmonic_number"
-    reason: an RF cavity with voltage but no frequency cannot be modelled
+    reason: pals2cosy requires frequency or harmonic_number to build COSY's RF element
   unit_tests/elements/rf_voltage_and_gradient.pals.yaml:
     expect: error
     error: ValueError
     match: "RFP needs frequency or harmonic_number"
-    reason: an RF cavity with voltage but no frequency cannot be modelled
+    reason: pals2cosy requires frequency or harmonic_number to build COSY's RF element
   unit_tests/elements/twiss_momentum_dependence.pals.yaml:
     expect: converts
 
@@ -134,7 +134,8 @@ examples:
     expect: error
     error: ValueError
     match: "'length' must be non-negative"
-    reason: the solenoid length 0.1*log(abs(-0.34)) evaluates to a negative length
+    reason: pals2cosy rejects negative element lengths (not a PALS rule); the solenoid
+      length 0.1*log(abs(-0.34)) is negative
   unit_tests/expressions/species_constant.pals.yaml:
     expect: error
     error: ValueError

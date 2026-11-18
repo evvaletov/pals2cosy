@@ -18,8 +18,11 @@ Author: Eremey Valetov
 
 import math
 import os
+import re
 import warnings
+from dataclasses import dataclass
 
+from ._elements import blank_element
 from ._io import load_file as _load_file
 from ._version import __pals_commit__
 from .constants import C_LIGHT, F_RF_DEFAULT
@@ -27,8 +30,10 @@ from .diagnostics import (
     PALSConversionWarning, PALSDeprecationWarning, PALSReminder,
     UnsupportedFeatureError,
 )
-from .expressions import Scope
-from .pals_elements import ElementContext, ExtensionLabels, normalize_element
+from .expressions import ExpressionError, Scope
+from .pals_elements import (
+    ElementContext, ExtensionLabels, is_extension_block, normalize_element,
+)
 from .species import parse_species
 
 # Major versions of the PALS schema this release understands. The standard
@@ -45,6 +50,14 @@ _ROOT_KEYS = frozenset({
 # Kinds that never appear in the tracked element sequence: the branch's
 # BeginningEle only carries initial values, and expansion removes Placeholders.
 _BOOKKEEPING_KINDS = ("BeginningEle", "Placeholder")
+
+# Expansion brackets the items of a BeamLine that declares a `length` with
+# these marks, so that the remainder can be filled with a drift once the
+# element lengths are known.
+_LINE_START = "<BeamLine start>"
+_LINE_END = "<BeamLine end>"
+
+_RANDOM_CALL = re.compile(r"\brandom(?:_gauss)?\s*\(")
 
 
 def _warn(message):
@@ -96,14 +109,14 @@ def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=
     flat = _expand_beamline(root, facility.catalog)
 
     ctx = ElementContext(facility.scope, facility.catalog, labels, None, 0.0)
-    species, kinetic_energy = _reference(flat, facility, ctx, ke_override,
-                                         particle_override)
+    species, kinetic_energy, time_ref = _reference(flat, facility, ctx, ke_override,
+                                                   particle_override)
     ctx.species = species
     ctx.e_tot_ev = (kinetic_energy + species.mass_mev) * 1e6
     brho = ctx.brho
     pc_mev = ctx.pc_ev / 1e6
 
-    elements, transit_time = _position_and_normalize(flat, ctx)
+    elements, transit_time = _position_and_normalize(flat, ctx, time_ref)
 
     return {
         "kinetic_energy_mev": kinetic_energy,
@@ -127,11 +140,14 @@ def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=
 # -----------------------------------------------------------------------
 
 def _check_root(pals, labels):
+    if "load" in pals:
+        raise UnsupportedFeatureError(
+            "PALS 'load' is not supported; combine the lattice into a single "
+            "self-contained document")
+    _reject_include(pals, "PALS")
     for key, value in pals.items():
-        if key in ("include", "load"):
-            raise UnsupportedFeatureError(
-                f"PALS '{key}' is not supported; combine the lattice into a single "
-                f"self-contained document")
+        if is_extension_block(value):
+            continue
         if key == "post_expansion" and value:
             raise UnsupportedFeatureError(
                 "PALS 'post_expansion' is not supported (it modifies the expanded "
@@ -147,6 +163,21 @@ def _check_root(pals, labels):
     for reminder in pals.get("reminders") or []:
         warnings.warn(f"PALS reminder: {reminder}", PALSReminder, stacklevel=3)
     return _check_version(pals.get("version"))
+
+
+def _reject_include(node, where):
+    """``include`` may appear at any level of the document; none is supported."""
+    if isinstance(node, dict):
+        if "include" in node:
+            raise UnsupportedFeatureError(
+                f"PALS 'include' is not supported (in {where}); combine the lattice "
+                f"into a single self-contained document")
+        for key, value in node.items():
+            if not is_extension_block(value):
+                _reject_include(value, f"{where}.{key}")
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            _reject_include(item, f"{where}[{i}]")
 
 
 def _check_version(version):
@@ -178,12 +209,16 @@ class _Facility:
         self.order = []
         self.uses = []
         self.definitions = {}
+        self._redefinitions = []
         for item in facility_list:
             if not isinstance(item, dict):
                 raise ValueError(f"Malformed facility entry {item!r}")
             for key, value in item.items():
                 self._entry(key, value)
         self.scope = Scope(self.definitions, self._parameter)
+        self._check_redefinitions()
+        for name in self.order:
+            self._draw_random_values(self.catalog[name])
 
     def _entry(self, key, value):
         if key == "use":
@@ -207,7 +242,7 @@ class _Facility:
         elif not isinstance(value, dict):
             if not self.labels.matches(key):
                 _warn(f"Facility entry '{key}' is not a definition; ignored")
-        elif "extension" in value:
+        elif is_extension_block(value):
             return
         elif value.get("kind") in ("constant", "variable"):
             if "value" not in value:
@@ -229,12 +264,45 @@ class _Facility:
             self.order.append(key)
 
     def _define(self, name, raw):
-        previous = self.definitions.get(name)
-        if previous is not None and previous != raw:
-            raise ValueError(
-                f"Constant or variable '{name}' is redefined with a different value "
-                f"({previous!r} and {raw!r})")
-        self.definitions[name] = raw
+        if name in self.definitions:
+            if self.definitions[name] != raw:
+                self._redefinitions.append((name, raw))
+        else:
+            self.definitions[name] = raw
+
+    def _check_redefinitions(self):
+        """A constant or variable may be defined again only with the same value."""
+        for name, raw in self._redefinitions:
+            first, again = self.scope.lookup(name), self.scope.evaluate_definition(raw)
+            if isinstance(first, str) or isinstance(again, str):
+                same = (isinstance(first, str) and isinstance(again, str)
+                        and parse_species(first).name == parse_species(again).name)
+            else:
+                same = math.isclose(first, again, rel_tol=1e-12, abs_tol=0.0)
+            if not same:
+                raise ValueError(
+                    f"Constant or variable '{name}' is redefined with a different value "
+                    f"({self.definitions[name]!r} and {raw!r})")
+
+    def _draw_random_values(self, node):
+        """Evaluate random() draws once per facility node, before branch expansion,
+        so that every instance of an element shares the same value."""
+        if isinstance(node, dict):
+            items = list(node.items())
+        elif isinstance(node, list):
+            items = list(enumerate(node))
+        else:
+            return
+        for key, value in items:
+            if isinstance(value, str) and _RANDOM_CALL.search(value):
+                try:
+                    result = self.scope.evaluate(value)
+                except ExpressionError:
+                    continue
+                if not isinstance(result, str):
+                    node[key] = result
+            elif not is_extension_block(value):
+                self._draw_random_values(value)
 
     def _parameter(self, name, path):
         if name not in self.catalog:
@@ -338,8 +406,12 @@ def _definition(name, catalog, seen=()):
     return _merge(base, {k: v for k, v in defn.items() if k != "inherit"})
 
 
-def _expand_beamline(name, catalog, _stack=None):
-    """Recursively expand a BeamLine into a flat list of element dicts."""
+def _expand_beamline(name, catalog, _stack=None, length=None):
+    """Recursively expand a BeamLine into a flat list of element dicts.
+
+    ``length`` overrides the BeamLine's own ``length``. When either is given,
+    the items are bracketed by BeamLine marks (see ``_close_beamlines``).
+    """
     stack = tuple(_stack or ())
     if name in stack:
         raise ValueError(
@@ -356,12 +428,19 @@ def _expand_beamline(name, catalog, _stack=None):
             result.extend(_resolve_reference(item, catalog, stack))
         elif isinstance(item, dict):
             for elem_name, spec in item.items():
+                if is_extension_block(spec):
+                    continue
                 if isinstance(spec, dict):
                     result.extend(_resolve_inline(elem_name, spec, catalog, stack))
                 else:
                     result.extend(_resolve_reference(elem_name, catalog, stack))
         else:
             raise ValueError(f"BeamLine '{name}': malformed line item {item!r}")
+    if length is None:
+        length = defn.get("length")
+    if length is not None:
+        result = [{"kind": _LINE_START, "name": name}, *result,
+                  {"kind": _LINE_END, "name": name, "length": length}]
     return result
 
 
@@ -413,12 +492,12 @@ def _resolve_inline(name, spec, catalog, stack):
     if merged.get("kind") == "BeamLine":
         if inherit is None and catalog.get(name, {}).get("kind") == "BeamLine" \
                 and "line" not in body:
-            extra = set(body) - {"kind"}
+            extra = set(body) - {"kind", "length"}
             if extra:
                 warnings.warn(
                     f"Element '{name}': keys {sorted(extra)} ignored on BeamLine reference",
                     PALSConversionWarning, stacklevel=2)
-            expanded = _expand_beamline(name, catalog, stack)
+            expanded = _expand_beamline(name, catalog, stack, length=body.get("length"))
         else:
             expanded = _expand_beamline(name, {**catalog, name: merged}, stack)
     else:
@@ -434,12 +513,17 @@ def _resolve_inline(name, spec, catalog, stack):
 # -----------------------------------------------------------------------
 
 def _reference(flat, facility, ctx, ke_override, particle_override):
-    """Return (species, kinetic energy [MeV]) of the branch reference particle."""
+    """Return (species, kinetic energy [MeV], reference time [s]) at the start
+    of the branch."""
     refp, source = None, None
-    beginning = next((e for e in flat if e.get("kind") == "BeginningEle"), None)
+    tracked = [e for e in flat if e.get("kind") not in (_LINE_START, _LINE_END)]
+    beginning = next((e for e in tracked if e.get("kind") == "BeginningEle"), None)
     if beginning is not None:
         refp = ctx.group(beginning, "ReferenceP", beginning["name"])
         source = beginning["name"]
+        if beginning is not tracked[0]:
+            _warn(f"Branch does not start with a BeginningEle; the reference particle "
+                  f"is taken from '{source}' further down the branch")
     else:
         for elem in flat:
             if elem.get("ReferenceP"):
@@ -498,7 +582,7 @@ def _reference(flat, facility, ctx, ke_override, particle_override):
                 "pc_ref on the BeginningEle, or use --ke to specify kinetic energy in MeV.")
     if not ke > 0:
         raise ValueError(f"Reference kinetic energy must be positive, got {ke} MeV")
-    return species, ke
+    return species, ke, ctx.optional(refp, "time_ref", source, "ReferenceP", 0.0)
 
 
 def _legacy_particle(facility):
@@ -523,33 +607,98 @@ def _legacy_particle(facility):
 # Element translation and positions
 # -----------------------------------------------------------------------
 
-def _position_and_normalize(flat, ctx):
+def _position_and_normalize(flat, ctx, time_ref=0.0):
     """Translate elements, assign s positions, resolve RF harmonic numbers.
 
-    Returns the element list and the reference transit time of the branch.
+    Returns the element list and the change of reference time along the
+    branch (``t1_ref``, including ReferenceChange time adjustments).
     """
-    elements = []
-    s = 0.0
-    transit_time = 0.0
+    items = []
     for raw in flat:
+        kind = raw.get("kind")
+        if kind in (_LINE_START, _LINE_END):
+            items.append(_Mark(kind, raw["name"], raw.get("length"),
+                               ctx.e_tot_ev, ctx.pc_ev))
+            continue
         e_up, pc_up = ctx.e_tot_ev, ctx.pc_ev
         elem = normalize_element(ctx, raw)
-        if raw.get("kind") in _BOOKKEEPING_KINDS:
-            continue
+        if kind not in _BOOKKEEPING_KINDS:
+            items.append((elem, e_up, pc_up, ctx.e_tot_ev, ctx.pc_ev))
+
+    elements = []
+    s = 0.0
+    t = time_ref
+    for elem, e_up, pc_up, e_down, pc_down in _close_beamlines(items, ctx):
         length = elem["length"]
         elem["s_start"] = s
         elem["s_end"] = s + length
         s += length
         if length:
-            transit_time += length * (e_up + ctx.e_tot_ev) / (C_LIGHT * (pc_up + ctx.pc_ev))
+            t += length * (e_up + e_down) / (C_LIGHT * (pc_up + pc_down))
+        if elem.get("time_ref") is not None:
+            t = elem["time_ref"]
+        t += elem.get("dtime_ref") or 0.0
         elements.append(elem)
+    transit_time = t - time_ref
 
     for elem in elements:
         harmonic = elem.get("rf_harmonic")
         if harmonic is not None:
             if transit_time <= 0:
                 raise ValueError(
-                    f"RFCavity '{elem['name']}': harmonic_number needs a branch of "
-                    f"nonzero length to define the revolution frequency")
+                    f"RFCavity '{elem['name']}': harmonic_number needs a positive "
+                    f"reference time along the branch to define the revolution "
+                    f"frequency, got {transit_time} s")
             elem["rf_frequency_hz"] = harmonic / transit_time
     return elements, transit_time
+
+
+@dataclass
+class _Mark:
+    kind: str
+    line: str
+    length: object
+    e_tot_ev: float
+    pc_ev: float
+
+
+def _close_beamlines(items, ctx):
+    """Replace BeamLine marks by drifts that make up each declared length.
+
+    A BeamLine with ``length`` ends that far from its start, so a length
+    beyond its items leaves a field-free gap at its end (at the front, when a
+    negative repeat reversed the line). A shorter length would make the next
+    item overlap this one, which a transfer map cannot represent.
+    """
+    result, stack = [], []
+    for item in items:
+        if not isinstance(item, _Mark):
+            result.append(item)
+            if stack:
+                stack[-1]["length"] += item[0]["length"]
+            continue
+        top = stack[-1] if stack else None
+        if top is None or top["mark"].line != item.line or top["mark"].kind == item.kind:
+            stack.append({"mark": item, "index": len(result), "length": 0.0})
+            continue
+        stack.pop()
+        end = item if item.kind == _LINE_END else top["mark"]
+        declared = ctx.number(end.length, end.line, "length")
+        actual = top["length"]
+        if math.isclose(declared, actual, rel_tol=1e-9, abs_tol=1e-12):
+            gap = 0.0
+        elif declared < actual:
+            raise UnsupportedFeatureError(
+                f"BeamLine '{end.line}': length {declared} m is shorter than its line "
+                f"items ({actual} m); overlapping line items are not supported")
+        else:
+            gap = declared - actual
+            drift = blank_element("DRIFT", f"{end.line}_end", gap)
+            entry = (drift, end.e_tot_ev, end.pc_ev, end.e_tot_ev, end.pc_ev)
+            if end is item:
+                result.append(entry)
+            else:
+                result.insert(top["index"], entry)
+        if stack:
+            stack[-1]["length"] += actual + gap
+    return result

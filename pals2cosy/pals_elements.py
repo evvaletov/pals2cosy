@@ -37,9 +37,48 @@ _EXTENSION_KEYS = frozenset({"WigglerP", "RFCavityP", "plane", "instrument_type"
 
 _MULTIPOLE_KEY = re.compile(r"^(?P<form>[BK])(?P<comp>[ns])(?P<order>\d+)"
                             r"(?P<integrated>L)?(?P<taper>_taper)?$")
+_ELECTRIC_KEY = re.compile(r"^E[ns]\d+L?$")
 _TILT_KEY = re.compile(r"^tilt(?P<order>\d+)$")
 
-_ZERO_LENGTH_KINDS = ("Marker", "BeginningEle", "Placeholder", "Fiducial", "Fork")
+# Components of the parameter groups pals2cosy reads, at the pinned
+# specification commit (parameters/*.md), plus the pals2cosy extension groups.
+_OFFSETS = ("x_offset", "y_offset", "z_offset", "x_rot", "y_rot", "z_rot")
+_GROUP_KEYS = {
+    "ApertureP": frozenset({
+        "x_min", "x_max", "x_center", "x_width", "y_min", "y_max", "y_center",
+        "y_width", "shape", "location", "vertices", "material", "thickness",
+        "aperture_shifts_with_body", "aperture_active"}),
+    "BendP": frozenset({
+        "angle_ref", "Bn0_ref", "e1", "e2", "e1_rect", "e2_rect", "edge1_int",
+        "edge2_int", "g_ref", "h1", "h2", "Kn0_from_g_ref", "L_chord", "L_sagitta",
+        "L_rectangle", "multipole_geometry", "ref_geometry", "radius_ref", "tilt_ref"}),
+    "BodyShiftP": frozenset(_OFFSETS),
+    "ForkP": frozenset({
+        "to_line", "destination_element", "new_branch", "propagate_reference",
+        "forked_to"}),
+    "PatchP": frozenset(_OFFSETS + ("flexible", "ref_coords", "user_sets_length")),
+    "ReferenceP": frozenset({"species_ref", "pc_ref", "E_tot_ref", "time_ref"}),
+    "ReferenceChangeP": frozenset({
+        "dtime_ref", "dE_ref", "dpc_ref", "time_ref", "E_tot_ref", "pc_ref",
+        "species_ref"}),
+    "RFP": frozenset({
+        "frequency", "harmonic_number", "voltage", "gradient", "phase",
+        "multipass_phase", "cavity_type", "num_cells", "zero_phase", "L_active",
+        "dE_ref"}),
+    "SolenoidP": frozenset({"Ksol", "Bsol", "Bz"}),
+    "WigglerP": frozenset({"peak_field", "period"}),
+    "RFCavityP": frozenset({"voltage_kv", "frequency_hz", "phase_deg"}),
+}
+_GROUP_KEY_PATTERNS = {
+    "MagneticMultipoleP": (_MULTIPOLE_KEY, _TILT_KEY),
+    "ElectricMultipoleP": (_ELECTRIC_KEY, _TILT_KEY),
+}
+
+_ZERO_LENGTH_KINDS = ("Marker", "BeginningEle", "Placeholder", "Fiducial", "Fork",
+                      "FloorShift")
+_MULTIPOLE_KINDS = frozenset({
+    "Quadrupole", "Sextupole", "Octupole", "Multipole", "Kicker", "Bend",
+})
 _UNMODELLED_KINDS = frozenset({
     "ACKicker", "BeamBeam", "Converter", "CrabCavity", "EGun", "Feedback",
     "Foil", "Girder", "Mask", "Match", "Taylor", "UnionEle",
@@ -56,6 +95,11 @@ _REF_GEOMETRIES = ("ARC", "CHORD", "ENTRANCE_COORDS", "EXIT_COORDS")
 
 def _warn(message):
     warnings.warn(message, PALSConversionWarning, stacklevel=3)
+
+
+def is_extension_block(value):
+    """``<name>: {extension: <type>, ...}`` blocks may appear at any level."""
+    return isinstance(value, dict) and "extension" in value
 
 
 class ExtensionLabels:
@@ -302,9 +346,6 @@ def read_multipoles(ctx, raw, name, length, gname="MagneticMultipoleP"):
         m = _TILT_KEY.match(key)
         if m:
             tilts[int(m.group("order"))] = ctx.number(value, name, f"{gname}.{key}")
-            continue
-        if not ctx.labels.matches(key):
-            _warn(f"Element '{name}': unknown {gname} key '{key}' ignored")
 
     thin = length == 0
     normalized = False
@@ -508,7 +549,6 @@ def _solenoid(ctx, raw, name, kind, length):
     elif length == 0 and bz:
         _warn(f"Solenoid '{name}': zero-length solenoid has no effect")
     elem["bz"] = bz
-    _warn_unconverted_multipoles(ctx, raw, name, kind, length)
     return elem
 
 
@@ -526,7 +566,6 @@ def _warn_unconverted_solenoid(ctx, raw, name, kind):
 
 def _rf_cavity(ctx, raw, name, kind, length):
     elem = blank_element("RFC", name, length)
-    _warn_unconverted_multipoles(ctx, raw, name, kind, length)
     _warn_unconverted_solenoid(ctx, raw, name, kind)
     rfp = ctx.group(raw, "RFP", name)
     if rfp is None and raw.get("RFCavityP") is not None:
@@ -549,11 +588,10 @@ def _rf_cavity(ctx, raw, name, kind, length):
         voltage = gradient * l_active
     if voltage is None:
         _no_strength(kind, name, "no RFP.voltage or gradient")
-        return elem
 
     d_e_ref = num("dE_ref", 0.0)
-    if voltage == 0:
-        ctx.e_tot_ev += d_e_ref
+    if not voltage:
+        _change_reference_energy(ctx, name, d_e_ref, 0.0)
         return elem
 
     frequency, harmonic = num("frequency"), num("harmonic_number")
@@ -579,11 +617,7 @@ def _rf_cavity(ctx, raw, name, kind, length):
 
     phase_deg = cosy_rf_phase(num("phase", 0.0), zero_phase, ctx.species.charge)
     cosy_gain = ctx.species.charge * voltage * math.sin(math.radians(phase_deg))
-    if not math.isclose(d_e_ref, cosy_gain, rel_tol=1e-6, abs_tol=1e-3):
-        _warn(f"RFCavity '{name}': COSY re-references the energy to the reference "
-              f"particle's gain of {cosy_gain} eV, while RFP.dE_ref = {d_e_ref} eV; "
-              f"downstream maps are relative to the COSY reference")
-    ctx.e_tot_ev += d_e_ref
+    _change_reference_energy(ctx, name, d_e_ref, cosy_gain)
 
     elem["rf_voltage_kv"] = voltage / 1e3
     elem["rf_frequency_hz"] = frequency
@@ -591,6 +625,15 @@ def _rf_cavity(ctx, raw, name, kind, length):
     elem["rf_phase_deg"] = phase_deg
     elem["rf_de_ref_ev"] = d_e_ref
     return elem
+
+
+def _change_reference_energy(ctx, name, d_e_ref, cosy_gain):
+    """Apply ``RFP.dE_ref`` to the PALS reference; report a COSY mismatch."""
+    if not math.isclose(d_e_ref, cosy_gain, rel_tol=1e-6, abs_tol=1e-3):
+        _warn(f"RFCavity '{name}': COSY re-references the energy to the reference "
+              f"particle's gain of {cosy_gain} eV, while RFP.dE_ref = {d_e_ref} eV; "
+              f"downstream maps are relative to the COSY reference")
+    ctx.e_tot_ev += d_e_ref
 
 
 def cosy_rf_phase(phase_rad, zero_phase, charge):
@@ -664,14 +707,9 @@ def _zero_length(ctx, raw, name, kind, length):
     return blank_element("MARKER", name, 0.0)
 
 
-def _floor_shift(ctx, raw, name, kind, length):
-    return blank_element("MARKER", name, 0.0)
-
-
 def _patch(ctx, raw, name, kind, length):
     patch = ctx.group(raw, "PatchP", name) or {}
-    shifts = [k for k in ("x_offset", "y_offset", "z_offset", "x_rot", "y_rot", "z_rot")
-              if ctx.optional(patch, k, name, "PatchP", 0.0)]
+    shifts = [k for k in _OFFSETS if ctx.optional(patch, k, name, "PatchP", 0.0)]
     if shifts or length or patch.get("flexible"):
         raise UnsupportedFeatureError(
             f"Patch '{name}' shifts the reference orbit; Patch elements are not supported")
@@ -686,7 +724,16 @@ def _reference_change(ctx, raw, name, kind, length):
         raise UnsupportedFeatureError(
             f"ReferenceChange '{name}' changes {', '.join(changed)}; changing the "
             f"reference energy or species mid-branch is not supported")
-    return blank_element("MARKER", name, 0.0)
+    timing = [k for k in ("dtime_ref", "time_ref") if rc.get(k) is not None]
+    if len(timing) > 1:
+        raise ValueError(
+            f"ReferenceChange '{name}': give only one of dtime_ref and time_ref")
+    # Field-free, so a length is kept as a drift. Time adjustments enter the
+    # branch reference time that RFP.harmonic_number refers to.
+    elem = blank_element("MARKER", name, length)
+    for key in timing:
+        elem[key] = ctx.number(rc[key], name, f"ReferenceChangeP.{key}")
+    return elem
 
 
 def _unmodelled(ctx, raw, name, kind, length):
@@ -709,7 +756,6 @@ _HANDLERS = {
     "RFCavity": _rf_cavity,
     "Wiggler": _wiggler,
     "Instrument": _instrument,
-    "FloorShift": _floor_shift,
     "Patch": _patch,
     "ReferenceChange": _reference_change,
 }
@@ -743,6 +789,7 @@ def normalize_element(ctx, raw):
     length_given = None if raw_length is None else length
 
     _check_keys(ctx, raw, name)
+    _check_group_keys(ctx, raw, name)
     _check_body_shift(ctx, raw, name)
     _check_electric(ctx, raw, name, kind)
 
@@ -753,29 +800,46 @@ def normalize_element(ctx, raw):
                 f"the reference orbit, which COSY cannot represent")
         return blank_element("DRIFT", name, length)
 
-    handler = _HANDLERS.get(kind)
-    if handler is None:
-        return _unmodelled(ctx, raw, name, kind, length)
+    handler = _HANDLERS.get(kind, _unmodelled)
     if kind == "Bend":
         return _bend(ctx, raw, name, kind, length_given)
+    if kind not in _MULTIPOLE_KINDS and handler is not _unmodelled:
+        _warn_unconverted_multipoles(ctx, raw, name, kind, length)
     return handler(ctx, raw, name, kind, length)
 
 
 def _check_keys(ctx, raw, name):
-    for key in raw:
+    for key, value in raw.items():
         if (key in _KNOWN_GROUPS or key in _NON_GROUP_KEYS or key in _EXTENSION_KEYS
-                or ctx.labels.matches(key)):
+                or ctx.labels.matches(key) or is_extension_block(value)):
             continue
         _warn(f"Element '{name}': unknown key '{key}' ignored (declare it in "
               f"extension_labels if it is extension data)")
+
+
+def _known_group_key(gname, key):
+    if gname in _GROUP_KEY_PATTERNS:
+        return any(p.match(key) for p in _GROUP_KEY_PATTERNS[gname])
+    return key in _GROUP_KEYS[gname]
+
+
+def _check_group_keys(ctx, raw, name):
+    """Report misspelled or unknown components of the groups pals2cosy reads."""
+    for gname in raw:
+        if gname not in _GROUP_KEYS and gname not in _GROUP_KEY_PATTERNS:
+            continue
+        for key, value in (ctx.group(raw, gname, name) or {}).items():
+            if not (_known_group_key(gname, key) or ctx.labels.matches(key)
+                    or is_extension_block(value)):
+                _warn(f"Element '{name}': unknown {gname} key '{key}' ignored")
 
 
 def _check_body_shift(ctx, raw, name):
     shift = ctx.group(raw, "BodyShiftP", name)
     if not shift:
         return
-    nonzero = [k for k, v in shift.items()
-               if v is not None and ctx.number(v, name, f"BodyShiftP.{k}")]
+    nonzero = [k for k in _OFFSETS
+               if shift.get(k) is not None and ctx.number(shift[k], name, f"BodyShiftP.{k}")]
     if nonzero:
         _warn(f"Element '{name}': BodyShiftP misalignment ({', '.join(nonzero)}) "
               f"is not represented")
@@ -786,6 +850,6 @@ def _check_electric(ctx, raw, name, kind):
     if not group:
         return
     values = [ctx.number(v, name, f"ElectricMultipoleP.{k}")
-              for k, v in group.items() if v is not None and not ctx.labels.matches(k)]
+              for k, v in group.items() if v is not None and _ELECTRIC_KEY.match(k)]
     if any(values):
         _warn(f"{kind} '{name}': ElectricMultipoleP fields are not converted")

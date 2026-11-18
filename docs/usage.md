@@ -33,10 +33,11 @@ pals2cosy beamline.pals.yaml --dim 2 --order 5 --ke 40
 | `--ke FLOAT` | from lattice | Reference kinetic energy (MeV) |
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
-| `--dim INT` | 3 | Phase-space dimensions (2 or 3) |
-| `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius |
+| `--dim INT` | 3 (2 with `--twiss`) | Phase-space dimensions (2 or 3) |
+| `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius, also the half-gap of bends without `ApertureP` under `--fr 1`–`3` |
+| `--solenoid-fringe FLOAT` | bore radius | Fringe-field length (m) of COSY's soft-edge solenoid `CMS` |
 | `--particle STR` | from lattice | Reference species (PALS/OpenPMD name or ion such as `#12C+6`) |
-| `--twiss` | off | Append GT Twiss extraction (requires periodic lattice) |
+| `--twiss` | off | Append GT Twiss extraction (requires periodic lattice; a 3D map also needs RF) |
 | `--mode STR` | auto | Input format override |
 | `--beamline NAME` | first branch | Lattice branch or BeamLine to expand (official PALS only) |
 | `--strict` | off | Turn conversion warnings into errors |
@@ -77,7 +78,8 @@ The output is a complete COSY INFINITY input file. To run it:
 
 If `--twiss` was specified, results are written to `result.txt` as a JSON
 object containing Twiss parameters ($\beta$, $\alpha$, $\gamma$, phase advance
-$\mu$) in both horizontal and vertical planes.
+$\mu$) in both horizontal and vertical planes. The map is 2D unless `--dim 3`
+is given; COSY's `GT` needs RF to handle the longitudinal plane of a 3D map.
 
 Pass reference-particle overrides to the parser rather than to `convert()`:
 normalized strengths (`KnN`, `Ksol`, `Bn0_ref`) are turned into fields with

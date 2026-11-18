@@ -12,7 +12,10 @@ DL {length} ;
 
 Zero-length bookkeeping elements (`Marker`, `Fiducial`, `Fork`, `FloorShift`)
 produce no output; `BeginningEle` and `Placeholder` are not part of the
-element list. `Kicker` and `Instrument` become drifts (a nonzero kick warns).
+element list. `Kicker` and `Instrument` become drifts (a nonzero kick or
+multipole field warns), and so does a `ReferenceChange` with a length. A
+BeamLine whose declared `length` exceeds its items ends with a drift of the
+difference, named `<line>_end`.
 
 ## Multipoles → MQ, MH, MO, M5, MMS
 
@@ -51,11 +54,19 @@ DL -5e-07 ; MQ 1e-06 {B1L/1e-06·r} {r} ; DL -5e-07 ;
 ## Solenoid → CMS
 
 ```text
-CMS {Bsol} {r} {L} ;
+CMS {Bsol} {D} {L} ;
 ```
 
-`Bsol` is `SolenoidP.Bsol`, or `Ksol · Bρ`. COSY's CMS field has tanh fringes
-of length `r`.
+`Bsol` is `SolenoidP.Bsol`, or `Ksol · Bρ`. COSY's CMS field is always soft
+edged,
+
+$$B(s) = \frac{B_\mathrm{sol}}{2\tanh(L/2D)}\left[\tanh\frac{s}{D} - \tanh\frac{s-L}{D}\right],$$
+
+with the fringe length $D$ given by `--solenoid-fringe` (default: the bore
+radius $r$). The rotation matches the hard-edge PALS solenoid, but
+$\int B^2\,ds \approx B_\mathrm{sol}^2 (L - D)$, so the focusing is weaker by
+about $D/L$; at `--fr 0` a warning reports this when it exceeds 0.1%. A
+shorter $D$ approaches the hard-edge map but lengthens COSY's integration.
 
 ## RF cavity → RF
 
@@ -85,7 +96,9 @@ length.
 
 - $L$, $\theta$: arc length and bend angle from the BendP two-of-three
   resolution
-- $d$: half gap, `ApertureP.y_width / 2` (or `(y_max − y_min)/2`)
+- $d$: half gap, `ApertureP.y_width / 2` (or `(y_max − y_min)/2`); with
+  `--fr` 1–3 and no gap given, the bore radius $r$ (with a warning), since
+  the gap sets the extent of COSY's fringe field
 - $e_1$, $e_2$: sector face angles (degrees) from `e1`/`e1_rect` per
   `ref_geometry`, multiplied by $\mathrm{sign}(\theta)$ because a negative
   bend is mirrored through `CB`
@@ -108,6 +121,15 @@ FC is not emitted for FR 0 (no fringe) or FR 2 (symplectic scaling).
 `BendP.edge1_int`/`edge2_int` are not mapped to Enge coefficients; COSY uses
 its default fringe model.
 
+## Wiggler → WI
+
+```text
+WI {B0} {period} {L} {r} 0 0 0 ;
+```
+
+From the pals2cosy `WigglerP` extension (`peak_field`, `period`). COSY's `WI`
+takes the period λ itself and builds the field `B0 cos(2πz/λ)`.
+
 ## Summary table
 
 | Element | COSYScript | Notes |
@@ -119,9 +141,9 @@ its default fringe model.
 | Multipole (orders 1–5) | `M5 L BQ BH BO BD BZ r ;` | `B_N r^N / N!` |
 | Skew, tilted, orders 6–10 | `MMS L PALSBN PALSBS NB r ;` | |
 | Thin multipole | `DL -ε/2 ; M.. ε ... ; DL -ε/2 ;` | ε = 1 µm |
-| Solenoid | `CMS Bsol r L ;` | |
+| Solenoid | `CMS Bsol D L ;` | soft edge, `D` = `--solenoid-fringe` |
 | RFCavity | `DL L/2 ; RF PALSRFV 0 f φ r ; DL L/2 ;` | |
-| Wiggler | `WI B k L r 0 0 0 ;` | `WigglerP` extension, `k = 2π/period` |
+| Wiggler | `WI B period L r 0 0 0 ;` | `WigglerP` extension |
 | Bend | `[RA ;] [CB ;] DIL L θ d e1 h1 e2 h2 ; [CB ;] [RA ;]` | |
-| Kicker, Instrument | `DL L ;` | |
+| Kicker, Instrument | `DL L ;` | a kick or multipole field warns |
 | Marker, Fiducial, Fork, FloorShift | _(none)_ | zero length |

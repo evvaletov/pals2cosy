@@ -28,7 +28,8 @@ pip install -e ".[dev]"
 ## Verify
 
 ```bash
-pals2cosy --help
+pals2cosy --version   # pals2cosy and the targeted PALS specification commit
+pals2cosy --demo
 ```
 
 ## Running tests
@@ -36,3 +37,7 @@ pals2cosy --help
 ```bash
 pytest tests/ -v
 ```
+
+Tests that run COSY INFINITY (transfer-map checks and the conformance suite)
+are skipped when `/usr/local/bin/cosy` and `cosy.fox` are not present; set
+`PALS2COSY_COSY_BIN` and `PALS2COSY_COSY_LIBRARY` to point elsewhere.

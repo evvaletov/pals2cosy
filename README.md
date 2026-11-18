@@ -1,9 +1,16 @@
 # pals2cosy
 
 Convert [PALS](https://pals-project.readthedocs.io/) lattice files to
-[COSY INFINITY](https://cosyinfinity.org) input code. Accepts the
-official PALS format (`PALS:` root with `facility:`/`line:` composition,
-auto-detected) or a flat `beamline:` format with positioned elements.
+[COSY INFINITY](https://cosyinfinity.org) input code (COSYScript). The
+generated program computes the transfer map of one lattice branch.
+
+pals2cosy 0.6 targets the PALS specification at commit
+[`b9d5b355`](https://github.com/pals-project/pals/tree/b9d5b35555a63f7ba015460e1c17ac929d35e215)
+(13 November 2026); `pals2cosy --version` and `pals2cosy.__pals_commit__`
+report it. Every official example at that commit is part of the test suite
+and either converts or fails with a documented reason (see
+[Conformance](#conformance)). A flat `beamline:` format with positioned
+elements is also accepted.
 
 ## Installation
 
@@ -22,17 +29,20 @@ Requires Python 3.9+ and PyYAML (for YAML input).
 ## Usage
 
 ```bash
-# PALS FODO cell (auto-detected from PALS: root key)
-pals2cosy examples/fodo.pals.yaml --ke 1000 --particle proton
+# PALS FODO channel (auto-detected from the PALS: root key)
+pals2cosy examples/fodo.pals.yaml
 
 # Write to file with fringe fields
-pals2cosy beamline.pals.yaml -o output.fox --ke 40 --fr 1
+pals2cosy beamline.pals.yaml -o output.fox --fr 1
 
-# Select a specific BeamLine from the facility
-pals2cosy lattice.pals.yaml --beamline fodo_cell --ke 1000
+# Select a Lattice branch or a BeamLine from the facility
+pals2cosy lattice.pals.yaml --beamline fodo_cell
 
-# Compute Twiss parameters (periodic lattices only)
+# Override the reference particle; compute Twiss parameters (periodic lattices)
 pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
+
+# Fail instead of warning when something is not represented in COSYScript
+pals2cosy lattice.pals.yaml --strict
 ```
 
 ### Options
@@ -40,16 +50,20 @@ pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o FILE` | stdout | Output COSYScript file |
-| `--ke FLOAT` | from lattice | Kinetic energy (MeV) |
+| `--ke FLOAT` | from lattice | Reference kinetic energy (MeV) |
+| `--particle STR` | from lattice | Reference species (see [Reference particle](#reference-particle)) |
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
 | `--dim INT` | 3 | Phase-space dimensions (2 or 3) |
-| `--quad-aperture FLOAT` | 0.027 | Quadrupole bore diameter (m) |
-| `--particle STR` | from lattice | Particle type (see [Supported particles](#supported-particles)) |
+| `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius |
 | `--twiss` | off | Append GT Twiss extraction (requires periodic lattice) |
+| `--beamline NAME` | first branch | Lattice branch or BeamLine to expand (official PALS only) |
+| `--strict` | off | Turn conversion warnings into errors |
 | `--mode STR` | auto | Input format override |
-| `--beamline NAME` | last | BeamLine to expand (official PALS only) |
 | `--no-comments` | off | Omit element name comments in COSYScript output |
+| `--version` | | Print the pals2cosy version and the targeted PALS commit |
+
+Exit status is 1, with a one-line message, when a lattice cannot be converted.
 
 ## Input format
 
@@ -57,85 +71,221 @@ pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
 PALS:
   version: null
   facility:
+    - start:
+        kind: BeginningEle
+        ReferenceP:
+          species_ref: proton
+          pc_ref: 1.0e9          # [eV]; or E_tot_ref
     - q1:
         kind: Quadrupole
-        length: 1.0
+        length: 0.5
         MagneticMultipoleP:
-          Bn1: 1.0           # Pole-tip field (Tesla)
+          Kn1: 0.4               # [1/m^2]; or Bn1 [T/m], Kn1L, Bn1L
     - b1:
-        kind: SBend
+        kind: Bend
         length: 2.0
         BendP:
-          g_ref: 0.5         # Bend strength (1/m)
-          e1: 0.1            # Entrance edge angle (radians)
-          e2: 0.2            # Exit edge angle (radians)
+          angle_ref: 0.1         # [rad]; any two of {g_ref, Bn0_ref, radius_ref},
+          e1_rect: 0.0           #   {length, L_chord, L_rectangle}, {angle_ref}
+          e2_rect: 0.0
     - my_line:
         kind: BeamLine
         line:
+          - start
           - q1
           - b1
+          - q1:
+              MagneticMultipoleP:
+                Kn1: -0.4
 ```
 
-See `examples/fodo.pals.yaml` for a complete FODO cell with `inherit:` and `repeat:`.
+See `examples/` for a FODO channel with `inherit:` and `repeat:` and a UH FEL
+beamline excerpt.
+
+## Supported PALS features
+
+- **Document:** `facility`, `version` (null, `0.x`, `1.x`; another major
+  version warns), `extension_labels` (declared names, prefixes and suffixes are
+  passed over silently), `authors`, `notes`, `reminders` (shown as
+  `PALSReminder` warnings), `phase_space_coordinates`.
+- **Lattices and lines:** `Lattice` with `branches` (by name, with
+  `inherit`, or defined in place), `use` (the last one wins; default is the
+  last Lattice), `BeamLine` with in-place definitions, element and line
+  `inherit`, parameter-group `inherit` (named groups and `element>Group`),
+  `repeat` (a negative repeat reverses the element order without direction
+  reversal, so a Bend keeps `e1` on its upstream face).
+- **Values:** constants and variables (`constants:`/`variables:` lists and
+  `kind: constant`/`variable`), arithmetic expressions in any numeric field
+  (`+ - * / ^ **`, parentheses, unary signs), the PALS constants (`pi`,
+  `twopi`, `c_light`, `r_electron`, ...), the PALS functions (`sqrt`, `exp`,
+  `log`, trigonometric and hyperbolic functions, `atan2`, `abs`, `factorial`,
+  `int`, `nint`, `floor`, `ceiling`, `modulo`, `sign`, `mass_of`,
+  `charge_of`, `anomalous_moment_of`, `random`, `random_gauss`, `expr`), and
+  element parameter references (`Q1>MagneticMultipoleP.Kn1`). Expressions are
+  parsed by a small recursive-descent evaluator; Python `eval` is never used.
+- **Reference particle:** `ReferenceP` of the branch's `BeginningEle`
+  (`species_ref`, `E_tot_ref` or `pc_ref`), with reference-energy changes
+  through RF `dE_ref`.
+- **Elements:** see the mapping below.
 
 ## Element mapping
 
-| Input type | COSYScript command | Notes |
-|-----------|-------------|-------|
-| Quadrupole (Bn1) | `MQ L Bn1 r ;` | Direct pole-tip field |
-| Quadrupole (current) | `MQ L {±G·I·r} r ;` | Sign from polarity |
-| Sextupole (Bn2) | `MH L Bn2 r ;` | Drift if Bn2 absent |
-| Octupole (Bn3) | `MO L Bn3 r ;` | Drift if Bn3 absent |
-| Multipole (Bn1–Bn5) | `M5 L BQ BH BO BD BZ r ;` | Up to dodecapole; drift if all absent |
-| Solenoid (Bz) | `CMS Bz D L ;` | Drift if Bz absent |
-| RFCavity | `RF V 0 W PHI D ;` | Drift if voltage/frequency absent |
-| Wiggler/Undulator | `WI B K L D 0 0 0 ;` | Drift if field/period absent |
-| SBend/RBend (no Enge) | `DIL L θ g/2 e₁ 0 e₂ 0 ;` | |
-| SBend/RBend (with Enge) | `FC ..; DIL ..; FD ;` | |
-| SBend (negative angle) | `CB ; DIL ..; CB ;` | |
-| BPM/OTR/Corrector | _(skipped)_ | Zero-length |
+PALS multipole coefficients are plain field derivatives,
+`By + i Bx = Σ (BnN + i BsN) (x + i y)^N / N!` with `BnN` in T/m^N, while
+COSY INFINITY's multipole elements take the field at the pole tip of a bore
+of radius `r` (`--quad-aperture / 2`). pals2cosy converts with
 
-## Supported particles
+    B_pole(N) = BnN · r^N / N!          (quad Bn1·r, sextupole Bn2·r²/2,
+                                          octupole Bn3·r³/6, decapole Bn4·r⁴/24)
 
-| Name | COSYScript command | Notes |
+Normalized strengths use the signed reference rigidity
+`Bρ = P0 / q = pc / (c q)` (`BnN = KnN · Bρ`, so the field of a given `KnN`
+changes sign with the charge), and length-integrated strengths are divided by
+the element length. `--quad-aperture` therefore changes only the radius at
+which COSY is told the field, not the gradient.
+
+| PALS | COSYScript | Notes |
 |------|------------|-------|
-| `electron` | `RPE` | Preset |
-| `proton` | `RPP` | Preset |
-| `muon`, `mu-` | `RPMU` | μ⁻ preset |
-| `mu+`, `antimuon` | `RP` | μ⁺ via generic RP (RPMU hardcodes charge −1) |
-| `pion+`, `pi+` | `RPPI E 1` | Preset with charge |
-| `pion-`, `pi-` | `RPPI E -1` | Preset with charge |
-| `positron` | `RP` | Generic |
-| `antiproton` | `RP` | Generic |
-| `deuteron` | `RP` | Generic |
-| `alpha` | `RP` | Generic (⁴He²⁺) |
-| `carbon12` | `RP` | Generic (¹²C⁶⁺) |
+| `Drift` | `DL L ;` | |
+| `Quadrupole` | `MQ L Bn1·r r ;` | `Kn1`, `Bn1L`, `Kn1L` converted to `Bn1` |
+| `Sextupole` | `MH L Bn2·r²/2 r ;` | |
+| `Octupole` | `MO L Bn3·r³/6 r ;` | |
+| `Multipole`, or several orders in one element | `M5 L B1 B2 B3 B4 B5 r ;` | `B_N = BnN·r^N/N!`, N = 1–5 |
+| skew components, tilts, or orders 6–10 | `MMS L PALSBN PALSBS NB r ;` | `(BnN' + i BsN') = (BnN + i BsN)·exp(−i(N+1)·tiltN)` |
+| zero-length multipole with `BnNL`/`KnNL` | `DL −ε/2 ; M.. ε … ; DL −ε/2 ;` | thin kick, ε = 1 µm, local `FR 0` |
+| `Bend` | `[RA τ ;] [CB ;] DIL L abs(θ) d e1 h1 e2 h2 ; [CB ;] [RA −τ ;]` | see below |
+| `Solenoid` | `CMS Bsol r L ;` | `Bsol = Ksol·Bρ` |
+| `RFCavity` | `DL L/2 ; RF PALSRFV 0 f φ r ; DL L/2 ;` | see below |
+| `Wiggler` (pals2cosy `WigglerP`) | `WI B 2π/period L r 0 0 0 ;` | |
+| `Kicker`, `Instrument` | `DL L ;` | a nonzero kick warns |
+| `Marker`, `Fiducial`, `Fork`, `FloorShift`, `BeginningEle`, `Placeholder` | — | zero-length bookkeeping |
+
+**Bends.** The arc length `L`, curvature `g` and angle `θ` are resolved from
+any two of the three BendP sets {`g_ref`, `Bn0_ref` = `g_ref`·Bρ,
+`radius_ref`}, {`length`, `L_chord` = 2 sin(θ/2)/g, `L_rectangle` = sin θ/g},
+{`angle_ref`}; a consistent third value is accepted, an inconsistent one is an
+error. Face angles follow `ref_geometry`: `e1 = e1_rect + θ/2` (ARC, CHORD),
+`e1 = e1_rect` / `e2 = e2_rect + θ` (ENTRANCE_COORDS),
+`e1 = e1_rect + θ` / `e2 = e2_rect` (EXIT_COORDS), with the spec's defaults
+(sector faces for ARC, rectangular otherwise). A negative angle is bent
+through `CB`, which mirrors x, so the face angles of a negative bend are
+emitted as `sign(θ)·e` (a rectangular bend has `e1 = e2 = abs(θ)/2` in COSY for
+either sign). Face curvatures `h1`, `h2` map to the DIL curvature arguments
+(positive is convex in both codes). `tilt_ref` rotates the bend about the
+entrance axis and is emitted as `RA` rotations (degrees) around it. The
+half-gap `d` is half of `ApertureP.y_width` (or `y_max − y_min`).
+
+**RF cavities.** COSY's `RF` is a thin kick, so it is placed between two
+drifts of half the cavity length. The voltage is `RFP.voltage` (or
+`gradient · L_active`, `L_active` defaulting to the length) in kV; the
+frequency is `RFP.frequency`, or `harmonic_number / T` with `T` the reference
+transit time of the converted branch. COSY gives the reference particle
+`Z·V·sin(φ)`, so the COSY phase is
+`φ = phase [deg] + 90 (ACCELERATING) | 0 (BELOW_TRANSITION) | 180 (ABOVE_TRANSITION)`,
+plus 180 for a negatively charged reference. COSY then re-references the
+energy to that gain; if it differs from `RFP.dE_ref` (PALS default 0) a
+warning says so. The reference energy used for normalized strengths
+downstream follows `dE_ref`, as in PALS.
+
+## Reference particle
+
+The reference particle is read from `ReferenceP` on the branch's
+`BeginningEle`: `species_ref` (or the name of a constant holding one) and
+`E_tot_ref` or `pc_ref` in eV. `--particle` and `--ke` (MeV) override them;
+with only `--particle`, the file's `E_tot_ref`/`pc_ref` is kept and the
+kinetic energy follows from the new mass. Normalized strengths are always
+resolved with the reference actually used.
+
+Species names follow PALS (OpenPMD) spelling: `electron`, `positron`,
+`proton`, `anti-proton`, `muon`, `anti-muon`, `tau`, `deuteron`, `triton`,
+`helion`, `alpha`, charged pions `pion+`/`pion-`, and ions written as an
+optional isotope and a charge state, such as `#3He+2`, `#12C+6`, `Au+79`
+(the most abundant isotope when none is given) or `H-`. Ion masses are atomic
+masses minus the removed electrons (binding energies neglected). The short
+names of earlier releases (`antiproton`, `mu+`, `antimuon`, `pi-`,
+`carbon12`, ...) still work. COSY presets are used where they exist (`RPE`,
+`RPP`, `RPMU`, `RPPI`); otherwise `RP E M Z` with the mass in COSY's atomic
+mass unit. A neutral reference species is an error.
+
+## Unsupported constructs
+
+Constructs that would change the converted lattice raise
+`UnsupportedFeatureError` (a subclass of both `ValueError` and
+`NotImplementedError`): `set`/`sets`, `post_expansion`, ABSOLUTE
+`Controller`s, `include`, `load`, `superimpose`, line-item `placement`,
+direction reversal (`direction: -1`), `Patch` elements with offsets, and
+`ReferenceChange` of the energy or species.
+
+Constructs that leave the converted branch intact are converted with a
+`PALSConversionWarning`: additional Lattice branches (select one with
+`--beamline`) and `Fork`s (not followed), `multipass` lines (expanded as plain
+sequences), `adjustments` (not applied), RELATIVE controllers, `girders` and
+`BodyShiftP` misalignments, `ElectricMultipoleP`, multipoles inside bends,
+bend dipole errors (`Kn0` differing from the reference), `edge1_int`/`edge2_int`
+(COSY uses its own Enge fringe model with `--fr 1–3`), kicks, RF
+`multipass_phase` and traveling-wave cavities, element kinds without a COSY
+counterpart (emitted as drifts), unknown keys, and active elements with no
+readable strength (emitted as drifts). `--strict` turns these into errors.
+
+## Deprecations
+
+Accepted with a `PALSDeprecationWarning` (a `FutureWarning`, shown by
+default):
+
+| Deprecated | Use instead |
+|------------|-------------|
+| `kind: SBend`, `kind: RBend` | `kind: Bend` (both are read as a Bend with `ref_geometry: ARC`, as in 0.5) |
+| `Lattice.particle` (`species`, `kinetic_energy` in eV) | `ReferenceP` on the `BeginningEle` |
+| `SolenoidP.Bz` | `SolenoidP.Bsol` |
+| `RFCavityP` (`voltage_kv`, `frequency_hz`, `phase_deg` in COSY's convention) | `RFP` |
+
+## pals2cosy extensions
+
+`WigglerP` (`peak_field` [T], `period` [m]) on a `Wiggler` has no PALS
+counterpart yet. Files that use it can declare it, as the specification's
+extension mechanism provides:
+
+```yaml
+PALS:
+  extension_labels:
+    names:
+      WigglerP: pals2cosy wiggler parameters (peak_field [T], period [m])
+```
+
+The flat `beamline:` format (FELsim) is a pals2cosy format; in it,
+`MagneticMultipoleP.Bn1`–`Bn5` are pole-tip fields in tesla, as FELsim writes
+them, not PALS field derivatives.
+
+## Conformance
+
+`tests/pals_examples/` holds the `examples/` tree of the PALS repository at
+the commit in `tests/pals_examples/SPEC_COMMIT`, with a `manifest.yaml`
+listing for every file whether it converts or which documented error it
+raises. The suite checks that the manifest covers every example, that each
+outcome holds, and, when COSY INFINITY is installed, that every converted
+example runs in COSY with the expected total length. Further tests compare
+COSY transfer maps with the PALS definitions (multipole kicks to fifth order,
+skew and tilted quadrupoles, sector and rectangular bends of both signs, bend
+tilts, RF phase conventions, solenoids).
 
 ## Known limitations
 
-- **Drift fallback:** All active elements fall back to drifts when their field
-  parameters are absent.
-- **Enge coefficients:** Maximum 6 coefficients per fringe field (COSY INFINITY FC
-  command limit). Longer coefficient lists are truncated with a warning.
-- **Quad sign convention:** The current-based quadrupole path (`±G·I·r`) uses an
-  electron-specific sign convention (QPF→negative B, QPD→positive B). Proton beamlines
-  should use Bn1 (pole-tip field) instead, which bypasses the sign logic.
-- **Reversed direction:** PALS `direction` and negative `repeat` are not supported.
-  Both emit a warning; the converter expands the lattice in the forward direction.
+- One branch per conversion; forks, multipass bookkeeping and other branches
+  are not followed.
+- Combined-function bends, electrostatic elements and misalignments are not
+  converted.
+- Enge coefficients: COSY's `FC` accepts at most 6 per fringe field; longer
+  lists are truncated with a warning.
+- Flat-format quadrupoles given by current (`±G·I·r`) use an electron sign
+  convention; PALS input specifies fields directly.
 
 ## Roadmap
 
-pals2cosy supports element types and parameters available in COSY INFINITY
-but not yet in the official PALS specification: `MagneticMultipoleP.Bn2`–`Bn5`,
-`SolenoidP.Bz`, and `RFCavityP`. These provisional extensions inform feedback
-to the PALS standardization effort and will track the standard as it evolves.
-
-Planned extensions:
 - Combined-function magnets (dipole + multipole fields → COSY `MC`/`MS`)
-- Electrostatic deflectors (`EC`, `ECL`, `ES`)
-- Skew multipoles (`MMS`, `EMS`)
-- Particle tracking (`SR` + `TR` + `PRAY`/`WRAY`)
-- FIT optimization blocks
+- Electrostatic elements (`ElectricMultipoleP` → `EQ`/`EM`, deflectors)
+- `include` and `load`, `set`, ABSOLUTE controllers
+- Misalignments (`BodyShiftP` → `SA`/`RA`)
+- Particle tracking (`SR` + `TR` + `PRAY`/`WRAY`) and FIT optimization blocks
 
 ## Author
 
@@ -148,6 +298,8 @@ Eremey Valetov
 
 This work was supported in part by DOE EPSCoR Award DE-SC0025583. The converter
 draws on the author's work on the University of Hawaiʻi free electron laser.
+The official examples in `tests/pals_examples/` come from the PALS project
+(github.com/pals-project/pals) under CC BY 4.0.
 
 ## Tests
 
@@ -155,3 +307,7 @@ draws on the author's work on the University of Hawaiʻi free electron laser.
 pip install pytest
 pytest tests/ -v
 ```
+
+Tests that run COSY INFINITY are skipped when `/usr/local/bin/cosy` and
+`cosy.fox` are not found (override with `PALS2COSY_COSY_BIN` and
+`PALS2COSY_COSY_LIBRARY`).

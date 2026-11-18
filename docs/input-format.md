@@ -8,7 +8,9 @@ root key. A flat `beamline:` format with positioned elements is also accepted.
 ## Official PALS format
 
 Files with the `PALS:` root key follow the
-[official PALS specification](https://pals-project.readthedocs.io/).
+[PALS specification](https://pals-project.readthedocs.io/); pals2cosy 0.6
+targets commit `b9d5b355` of
+[pals-project/pals](https://github.com/pals-project/pals).
 
 ### Structure
 
@@ -16,13 +18,19 @@ Files with the `PALS:` root key follow the
 PALS:
   version: null
   facility:
+    - start:
+        kind: BeginningEle
+        ReferenceP:
+          species_ref: electron
+          E_tot_ref: 40.51099895e6     # [eV]; or pc_ref [eV]
     - element_name:
-        kind: ElementType
+        kind: ElementKind
         length: 1.0
         ...
     - line_name:
         kind: BeamLine
         line:
+          - start
           - element_name
           - other_element:
               inherit: element_name
@@ -35,168 +43,138 @@ PALS:
     - use: lattice_name
 ```
 
-### Quadrupole (Bn1)
+The branch converted is the first branch of the Lattice named by the last
+`use` statement (or of the last Lattice); `--beamline` picks another branch or
+any BeamLine. A negative `repeat` reverses the order of the repeated elements
+without reversing their direction.
 
-Quadrupoles use `MagneticMultipoleP.Bn1` — the pole-tip field in Tesla:
+### Reference particle
+
+The `ReferenceP` group of the branch's `BeginningEle` sets the reference
+species (`species_ref`) and energy (`E_tot_ref` or `pc_ref`, in eV).
+`--ke` (MeV) and `--particle` override them. Species use the PALS (OpenPMD)
+spelling: `electron`, `positron`, `proton`, `anti-proton`, `muon`,
+`anti-muon`, `deuteron`, `alpha`, `pion+`, ions such as `#3He+2` or `Au+79`.
+
+### Constants, variables and expressions
+
+```yaml
+- constants:
+    - L_q: 0.25
+- variables:
+    - k_f: 0.8 / L_q
+- qf:
+    kind: Quadrupole
+    length: 2 * L_q
+    MagneticMultipoleP:
+      Kn1: k_f
+- qd:
+    inherit: qf
+    MagneticMultipoleP:
+      Kn1: -qf>MagneticMultipoleP.Kn1
+```
+
+Any numeric field may be an expression built from numbers, `+ - * / ^ **`,
+parentheses, the PALS constants and functions, constants and variables, and
+element parameter references.
+
+### Multipoles (MagneticMultipoleP)
+
+Strengths are PALS field coefficients of order `N`
+(`By + i Bx = Σ (BnN + i BsN)(x + i y)^N / N!`), in any of the forms
+
+| Key | Units | Meaning |
+|-----|-------|---------|
+| `BnN`, `BsN` | T/m^N | normal / skew field coefficient |
+| `KnN`, `KsN` | 1/m^(N+1) | normalized: `BnN = KnN · Bρ` |
+| `BnNL`, `KnNL`, ... | T/m^(N−1), 1/m^N | length-integrated |
+| `tiltN` | rad | rotation of the order-N multipole |
+| `BnN_taper`, ... | | added to the corresponding strength |
 
 ```yaml
 - q1:
     kind: Quadrupole
-    length: 1.0
+    length: 0.5
     MagneticMultipoleP:
-      Bn1: 1.0    # Tesla; positive = horizontally focusing for positive charge
-```
-
-### Sextupole (Bn2)
-
-Sextupoles use `MagneticMultipoleP.Bn2` — the sextupole pole-tip field in Tesla:
-
-```yaml
+      Bn1: 2.0          # T/m; positive focuses positive particles horizontally
 - s1:
     kind: Sextupole
     length: 0.2
     MagneticMultipoleP:
-      Bn2: 0.5    # Tesla
+      Kn2L: 0.3
+- sq:
+    kind: Quadrupole
+    length: 0.1
+    MagneticMultipoleP:
+      Kn1: 0.5
+      tilt1: 0.7853981634   # a skew quadrupole
 ```
 
-### Solenoid (Bz)
+A quadrupole, sextupole, octupole or multipole may carry any orders from 1 to
+10. A zero-length element with integrated strengths is a thin multipole.
 
-Solenoids use `SolenoidP.Bz` — the on-axis field in Tesla:
+### Bends (BendP)
+
+```yaml
+- b1:
+    kind: Bend
+    length: 2.0
+    BendP:
+      angle_ref: 0.1        # any two of {g_ref, Bn0_ref, radius_ref},
+      e1_rect: 0.0          #   {length, L_chord, L_rectangle}, {angle_ref}
+      e2_rect: 0.0
+      ref_geometry: ARC     # ARC, CHORD, ENTRANCE_COORDS, EXIT_COORDS
+      h1: 0.0               # face curvatures [1/m]
+      tilt_ref: 0.0         # [rad]
+    ApertureP:
+      y_width: 0.03         # full gap [m]
+```
+
+### Solenoids (SolenoidP)
 
 ```yaml
 - sol1:
     kind: Solenoid
     length: 0.5
     SolenoidP:
-      Bz: 1.5    # Tesla (on-axis field)
+      Bsol: 1.5    # T; or Ksol [1/m] = Bsol / Bρ
 ```
 
-### RF Cavity
-
-RF cavities use `RFCavityP` with voltage, frequency, and phase:
+### RF cavities (RFP)
 
 ```yaml
 - cav1:
     kind: RFCavity
     length: 0.5
-    RFCavityP:
-      voltage_kv: 100.0        # peak voltage (kV)
-      frequency_hz: 2856.0e6   # RF frequency (Hz)
-      phase_deg: 90.0           # RF phase (degrees)
-```
-
-### Octupole (Bn3)
-
-Octupoles use `MagneticMultipoleP.Bn3`:
-
-```yaml
-- o1:
-    kind: Octupole
-    length: 0.15
-    MagneticMultipoleP:
-      Bn3: 0.3    # Tesla
-```
-
-### Multipole (Bn1–Bn5)
-
-Generic multipoles can carry up to 5 harmonic fields (quad through dodecapole):
-
-```yaml
-- m1:
-    kind: Multipole
-    length: 0.2
-    MagneticMultipoleP:
-      Bn1: 0.5    # quadrupole component
-      Bn2: 0.1    # sextupole component
-      Bn3: 0.05   # octupole component
-```
-
-### Dipole (BendP)
-
-Dipoles use `BendP` with `g_ref` (1/m) and edge angles in radians:
-
-```yaml
-- b1:
-    kind: SBend
-    length: 2.0
-    BendP:
-      g_ref: 0.5    # 1/m → bending angle = g_ref × length
-      e1: 0.1        # entrance edge angle (radians)
-      e2: 0.2        # exit edge angle (radians)
-```
-
-### BeamLine composition
-
-Elements are composed using `line:` references, `inherit:` overrides, and `repeat:`:
-
-```yaml
-- fodo_cell:
-    kind: BeamLine
-    line:
-      - drift1
-      - quad1
-      - drift2:
-          kind: Drift
-          length: 0.5
-      - quad2:
-          inherit: quad1
-          MagneticMultipoleP:
-            Bn1: -1.0
-      - drift1
-
-- fodo_channel:
-    kind: BeamLine
-    line:
-      - fodo_cell:
-          repeat: 3
+    RFP:
+      voltage: 1.0e6           # V; or gradient [V/m] with L_active [m]
+      frequency: 1.3e9         # Hz; or harmonic_number
+      phase: 0.0               # rad
+      zero_phase: ACCELERATING # or BELOW_TRANSITION, ABOVE_TRANSITION
+      dE_ref: 1.0e6            # eV, change of the reference energy
 ```
 
 ### Parameter mapping
 
 | PALS field | Normalized dict | Conversion |
 |---|---|---|
-| `MagneticMultipoleP.Bn1` (T) | `bn1` | Direct |
-| `MagneticMultipoleP.Bn2` (T) | `bn2` | Direct |
-| `MagneticMultipoleP.Bn3` (T) | `bn3` | Direct |
-| `MagneticMultipoleP.Bn4` (T) | `bn4` | Direct |
-| `MagneticMultipoleP.Bn5` (T) | `bn5` | Direct |
-| `SolenoidP.Bz` (T) | `bz` | Direct |
-| `RFCavityP.voltage_kv` (kV) | `rf_voltage_kv` | Direct |
-| `RFCavityP.frequency_hz` (Hz) | `rf_frequency_hz` | Direct |
-| `RFCavityP.phase_deg` (deg) | `rf_phase_deg` | Direct |
-| `WigglerP.peak_field` (T) | `wiggler_field` | Direct |
-| `WigglerP.period` (m) | `wiggler_period` | Direct |
-| `BendP.g_ref` (1/m) + `length` (m) | `angle` (deg) | $\theta = g_\mathrm{ref} \times L \times 180/\pi$ |
-| `BendP.e1` / `BendP.e2` (rad) | edge angles (deg) | $\times 180/\pi$ |
+| `MagneticMultipoleP.BnN`, `BsN` (T/m^N) | `bn[N]`, `bs[N]` | tilt folded in, `KnN·Bρ`, `BnNL/L` |
+| `SolenoidP.Bsol` / `Ksol` | `bz` | `Ksol·Bρ` |
+| `RFP.voltage` (V) | `rf_voltage_kv` | ÷ 1000 |
+| `RFP.frequency` / `harmonic_number` | `rf_frequency_hz` | `h / T_branch` |
+| `RFP.phase` (rad), `zero_phase` | `rf_phase_deg` | COSY sine convention |
+| `BendP` geometry | `angle` (deg), `length` | two-of-three resolution |
+| `BendP.e1`, `e2` (rad) | edge angles (deg) | in the bend's own (`CB`) frame |
+| `BendP.h1`, `h2` (1/m) | edge curvatures | direct |
+| `BendP.tilt_ref` (rad) | `tilt` | direct |
+| `WigglerP.peak_field`, `period` | `wiggler_field`, `wiggler_period` | direct (pals2cosy extension) |
 
 ---
 
-## Supported element types
+## Flat `beamline:` format
 
-| PALS kind | COSYScript command | Notes |
-|-----------|-------------|-------|
-| `Quadrupole` | `MQ L Bn1 r ;` | Bn1 from `MagneticMultipoleP` |
-| `Sextupole` | `MH L Bn2 r ;` | Bn2 from `MagneticMultipoleP`; drift if absent |
-| `Octupole` | `MO L Bn3 r ;` | Bn3 from `MagneticMultipoleP`; drift if absent |
-| `Multipole` | `M5 L BQ BH BO BD BZ r ;` | Bn1–Bn5; drift if all absent |
-| `Solenoid` | `CMS Bz D L ;` | Bz from `SolenoidP`; drift if absent |
-| `RFCavity` | `RF V 0 W PHI D ;` | Drift if voltage/frequency absent |
-| `Wiggler` | `WI B K L D 0 0 0 ;` | Drift if field/period absent |
-| `SBend`, `RBend` | `DIL L θ g/2 e₁ 0 e₂ 0 ;` | With optional FC/CB |
-| `Drift` | `DL L ;` | |
-| `Kicker`, `Instrument`, `Marker` | _(skipped)_ | Zero-length |
-
-## Known limitations
-
-- **Enge coefficient truncation:** COSY INFINITY's `FC` command accepts at most
-  6 Enge coefficients. If more are provided, they are truncated with a warning.
-
-- **Bn1 sign convention and particle type:** In the official PALS parser,
-  quadrupole polarity labels (QPF/QPD) are assigned from the sign of Bn1 using
-  the proton convention (positive Bn1 = horizontally focusing). For electrons,
-  the labels are inverted. This is cosmetic only — the converter uses Bn1
-  directly for `MQ` commands.
-
-- **Inherit merge depth:** The `inherit:` mechanism merges nested dicts
-  (e.g. `MagneticMultipoleP`) one level deep only. Deeper nesting is not
-  currently supported by any PALS element type.
+The flat format, written by FELsim, lists positioned elements
+(`s_start_m`, `s_end_m`) and inserts drifts between them. In this format
+`MagneticMultipoleP.Bn1`–`Bn5` are pole-tip fields in tesla, passed to COSY
+unchanged, and quadrupoles may instead give a current (`parameters.current_a`)
+converted with the gradient coefficient `G`.

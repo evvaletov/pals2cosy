@@ -4,7 +4,13 @@
 
 ```bash
 # Auto-detect format and print COSYScript code to stdout
+pals2cosy beamline.pals.yaml
+
+# Override the reference particle given in the file
 pals2cosy beamline.pals.yaml --ke 1000 --particle proton
+
+# Treat anything not represented in COSYScript as an error
+pals2cosy beamline.pals.yaml --strict
 
 # Write to file with fringe fields
 pals2cosy lattice.pals.yaml -o output.fox --ke 40 --fr 1
@@ -24,16 +30,22 @@ pals2cosy beamline.pals.yaml --dim 2 --order 5 --ke 40
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-o FILE` | stdout | Output COSYScript file |
-| `--ke FLOAT` | from lattice | Kinetic energy (MeV) |
+| `--ke FLOAT` | from lattice | Reference kinetic energy (MeV) |
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
 | `--dim INT` | 3 | Phase-space dimensions (2 or 3) |
-| `--quad-aperture FLOAT` | 0.027 | Quadrupole bore diameter (m) |
-| `--particle STR` | from lattice | Particle type (see README for full list) |
+| `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius |
+| `--particle STR` | from lattice | Reference species (PALS/OpenPMD name or ion such as `#12C+6`) |
 | `--twiss` | off | Append GT Twiss extraction (requires periodic lattice) |
 | `--mode STR` | auto | Input format override |
-| `--beamline NAME` | last | BeamLine to expand (official PALS only) |
+| `--beamline NAME` | first branch | Lattice branch or BeamLine to expand (official PALS only) |
+| `--strict` | off | Turn conversion warnings into errors |
 | `--no-comments` | off | Omit element name comments |
+| `--version` | | Print the version and the targeted PALS commit |
+
+A lattice that cannot be converted exits with status 1 and a one-line
+message. Conversion warnings (`PALSConversionWarning`) name each element or
+construct that is not represented, or only approximately, in the output.
 
 ## Python API
 
@@ -42,13 +54,10 @@ from pals2cosy import convert, parse_pals_lattice
 
 beam_params, elements = parse_pals_lattice(
     "lattice.pals.yaml",
-    ke_override=1000,
-    particle_override="proton",
-    beamline_name="fodo_cell",
+    beamline_name="fodo_cell",   # optional; also ke_override, particle_override
 )
 
-fox_code = convert(beam_params, elements, ke_override=1000,
-                   particle_override="proton")
+fox_code = convert(beam_params, elements, fringe_field_order=1)
 
 with open("output.fox", "w") as f:
     f.write(fox_code)
@@ -69,3 +78,8 @@ The output is a complete COSY INFINITY input file. To run it:
 If `--twiss` was specified, results are written to `result.txt` as a JSON
 object containing Twiss parameters ($\beta$, $\alpha$, $\gamma$, phase advance
 $\mu$) in both horizontal and vertical planes.
+
+Pass reference-particle overrides to the parser rather than to `convert()`:
+normalized strengths (`KnN`, `Ksol`, `Bn0_ref`) are turned into fields with
+the parser's reference rigidity, and `convert()` warns when its overrides
+would make them inconsistent.

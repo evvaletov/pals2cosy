@@ -1,6 +1,8 @@
 # Element mapping
 
-This page documents the COSYScript commands generated for each element type.
+This page documents the COSYScript commands generated for each element kind.
+Throughout, `r` is the bore radius `--quad-aperture / 2` (default 0.0135 m)
+and `Bρ = P0/q` is the signed reference rigidity.
 
 ## Drift
 
@@ -8,130 +10,118 @@ This page documents the COSYScript commands generated for each element type.
 DL {length} ;
 ```
 
-Zero-length elements (BPM, OTR, correctors) produce no output.
+Zero-length bookkeeping elements (`Marker`, `Fiducial`, `Fork`, `FloorShift`)
+produce no output; `BeginningEle` and `Placeholder` are not part of the
+element list. `Kicker` and `Instrument` become drifts (a nonzero kick warns).
 
-## Quadrupole → MQ
+## Multipoles → MQ, MH, MO, M5, MMS
 
-```text
-MQ {L} {b_pole} {r} ;
-```
+PALS gives field coefficients `B_N` in T/m^N; COSY takes the pole-tip field
 
-- $L$ = quadrupole length (m)
-- $r$ = bore radius = `quad_aperture / 2` (default 0.0135 m)
-- $b_\mathrm{pole}$ = pole-tip magnetic field (T) from `MagneticMultipoleP.Bn1`
+$$B_\mathrm{pole} = \frac{B_N\, r^N}{N!},$$
 
-## Sextupole → MH
-
-```text
-MH {L} {b_pole} {r} ;
-```
-
-- $L$ = sextupole length (m)
-- $b_\mathrm{pole}$ = pole-tip field (T) from `MagneticMultipoleP.Bn2`
-- $r$ = bore radius (m)
-
-Falls back to `DL` if `Bn2` is not provided.
-
-## Octupole → MO
+so that a quadrupole gets $B_1 r$, a sextupole $B_2 r^2/2$, an octupole
+$B_3 r^3/6$ and a decapole $B_4 r^4/24$. Normalized strengths are multiplied
+by $B\rho$, integrated strengths divided by the length.
 
 ```text
-MO {L} {b_pole} {r} ;
+MQ {L} {B1·r} {r} ;                         Quadrupole, order 1 only
+MH {L} {B2·r²/2} {r} ;                      Sextupole, order 2 only
+MO {L} {B3·r³/6} {r} ;                      Octupole, order 3 only
+M5 {L} {BQ} {BH} {BO} {BD} {BZ} {r} ;       several normal orders ≤ 5
 ```
 
-- $L$ = octupole length (m)
-- $b_\mathrm{pole}$ = pole-tip field (T) from `MagneticMultipoleP.Bn3`
-- $r$ = bore radius (m)
-
-Falls back to `DL` if `Bn3` is not provided.
-
-## Multipole → M5
+Skew components, tilts, or orders 6–10 use `MMS` with arrays declared in the
+`LATTICE` procedure:
 
 ```text
-M5 {L} {BQ} {BH} {BO} {BD} {BZ} {r} ;
+PALSBN(1) := ... ; PALSBS(1) := ... ; ...
+MMS {L} PALSBN PALSBS {NB} {r} ;
 ```
 
-- $L$ = multipole length (m)
-- BQ, BH, BO, BD, BZ = pole-tip fields (T) for quad through dodecapole
-  (`MagneticMultipoleP.Bn1`–`Bn5`; zero if absent)
-- $r$ = bore radius (m)
+with $(B_N' + i B_{sN}') = (B_N + i B_{sN})\, e^{-i(N+1)\,\mathrm{tilt}_N}$.
 
-Falls back to `DL` if all Bn fields are absent.
+A zero-length multipole with integrated strengths is a thin kick, represented
+by a 1 µm slice between drifts of −0.5 µm (with `FR 0` around it):
+
+```text
+DL -5e-07 ; MQ 1e-06 {B1L/1e-06·r} {r} ; DL -5e-07 ;
+```
 
 ## Solenoid → CMS
 
 ```text
-CMS {Bz} {D} {L} ;
+CMS {Bsol} {r} {L} ;
 ```
 
-- $B_z$ = on-axis field (T) from `SolenoidP.Bz`
-- $D$ = bore radius (m), used as the Enge falloff parameter
-- $L$ = solenoid length (m)
+`Bsol` is `SolenoidP.Bsol`, or `Ksol · Bρ`. COSY's CMS field has tanh fringes
+of length `r`.
 
-Falls back to `DL` if `Bz` is not provided.
-
-## RF Cavity → RF
+## RF cavity → RF
 
 ```text
-RF {V} 0 {W} {PHI} {D} ;
+DL {L/2} ;
+PALSRFV(1,1) := {V} ;
+RF PALSRFV 0 {f} {φ} {r} ;
+DL {L/2} ;
 ```
 
-- $V$ = peak voltage (kV) from `RFCavityP.voltage_kv`
-- 0 = polynomial order (uniform field)
-- $W$ = frequency (Hz) from `RFCavityP.frequency_hz`
-- $\Phi$ = phase (degrees) from `RFCavityP.phase_deg`
-- $D$ = bore radius (m)
+- $V$ = `RFP.voltage` (or `gradient · L_active`) in kV
+- $f$ = `RFP.frequency`, or `harmonic_number` divided by the reference
+  transit time of the branch
+- $\varphi = \mathrm{phase}\,[\mathrm{deg}] + 90°$ (`ACCELERATING`), $+0°$
+  (`BELOW_TRANSITION`) or $+180°$ (`ABOVE_TRANSITION`), plus 180° for a
+  negative reference charge, because COSY gives the reference particle
+  $Z V \sin\varphi$.
 
-Falls back to `DL` if voltage or frequency is absent.
+COSY's RF element is thin, so it sits mid-cavity and the drifts keep the
+length.
 
-## Dipole → DIL
+## Bend → DIL
 
 ```text
-DIL {L} {θ} {g/2} {e₁} 0 {e₂} 0 ;
+[RA {tilt_ref} ;] [CB ;] DIL {L} {|θ|} {d} {e1} {h1} {e2} {h2} ; [CB ;] [RA {-tilt_ref} ;]
 ```
 
-- $L$ = effective magnetic length (m)
-- $\theta$ = absolute bending angle (degrees)
-- $g/2$ = half pole gap (m)
-- $e_1$, $e_2$ = entrance and exit edge angles (degrees)
-
-For **negative bending angles**, the element is wrapped with `CB`:
-
-```text
-CB ;
-DIL {L} {|θ|} {g/2} {e₁} 0 {e₂} 0 ;
-CB ;
-```
+- $L$, $\theta$: arc length and bend angle from the BendP two-of-three
+  resolution
+- $d$: half gap, `ApertureP.y_width / 2` (or `(y_max − y_min)/2`)
+- $e_1$, $e_2$: sector face angles (degrees) from `e1`/`e1_rect` per
+  `ref_geometry`, multiplied by $\mathrm{sign}(\theta)$ because a negative
+  bend is mirrored through `CB`
+- $h_1$, $h_2$: face curvatures (1/m, positive convex)
+- `RA` rotates the coordinates by `tilt_ref` (degrees) for a tilted bend
 
 ### Fringe fields (Enge coefficients)
 
-When `--fr 1` or `--fr 3` is used and the dipole has Enge coefficients:
+When `--fr 1` or `--fr 3` is used and a flat-format dipole has Enge
+coefficients:
 
 ```text
 FC 1 1 1 {c₀} {c₁} {c₂} {c₃} {c₄} {c₅} ;
 FC 1 2 1 {c₀} {c₁} {c₂} {c₃} {c₄} {c₅} ;
-DIL {L} {θ} {g/2} {e₁} 0 {e₂} 0 ;
+DIL ... ;
 FD ;
 ```
 
-`FC 1 1 1` sets entrance Enge coefficients, `FC 1 2 1` sets exit.
-`FD` restores default Enge coefficients after the element.
-
 FC is not emitted for FR 0 (no fringe) or FR 2 (symplectic scaling).
+`BendP.edge1_int`/`edge2_int` are not mapped to Enge coefficients; COSY uses
+its default fringe model.
 
 ## Summary table
 
 | Element | COSYScript | Notes |
 |---------|-----|-------|
 | Drift | `DL L ;` | |
-| Quadrupole (Bn1) | `MQ L Bn1 r ;` | |
-| Sextupole (Bn2) | `MH L Bn2 r ;` | Drift if Bn2 absent |
-| Octupole (Bn3) | `MO L Bn3 r ;` | Drift if Bn3 absent |
-| Multipole (Bn1–Bn5) | `M5 L BQ BH BO BD BZ r ;` | Up to dodecapole; drift if all absent |
-| Solenoid (Bz) | `CMS Bz D L ;` | Drift if Bz absent |
-| RFCavity | `RF V 0 W PHI D ;` | Drift if voltage/frequency absent |
-| Wiggler/Undulator | `WI B K L D 0 0 0 ;` | Drift if field/period absent |
-| SBend/RBend (no Enge) | `DIL L θ g/2 e₁ 0 e₂ 0 ;` | |
-| SBend/RBend (with Enge) | `FC ..; DIL ..; FD ;` | |
-| SBend (negative angle) | `CB ; DIL ..; CB ;` | |
-| Marker | _(skipped)_ | Zero-length |
-| BPM/OTR/corrector | _(skipped)_ | Zero-length |
+| Quadrupole | `MQ L B1·r r ;` | |
+| Sextupole | `MH L B2·r²/2 r ;` | |
+| Octupole | `MO L B3·r³/6 r ;` | |
+| Multipole (orders 1–5) | `M5 L BQ BH BO BD BZ r ;` | `B_N r^N / N!` |
+| Skew, tilted, orders 6–10 | `MMS L PALSBN PALSBS NB r ;` | |
+| Thin multipole | `DL -ε/2 ; M.. ε ... ; DL -ε/2 ;` | ε = 1 µm |
+| Solenoid | `CMS Bsol r L ;` | |
+| RFCavity | `DL L/2 ; RF PALSRFV 0 f φ r ; DL L/2 ;` | |
+| Wiggler | `WI B k L r 0 0 0 ;` | `WigglerP` extension, `k = 2π/period` |
+| Bend | `[RA ;] [CB ;] DIL L θ d e1 h1 e2 h2 ; [CB ;] [RA ;]` | |
+| Kicker, Instrument | `DL L ;` | |
+| Marker, Fiducial, Fork, FloorShift | _(none)_ | zero length |

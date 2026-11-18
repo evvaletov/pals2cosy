@@ -1,5 +1,6 @@
 """Tests for official PALS format parser (pals_parser.py)."""
 
+import math
 import os
 import warnings
 import pytest
@@ -55,8 +56,9 @@ def test_repeat():
         data = yaml.safe_load(f)
     catalog = _build_catalog(data["PALS"]["facility"])
     flat = _expand_beamline("fodo_channel", catalog)
-    # fodo_channel repeats fodo_cell 3 times → 15 elements
-    assert len(flat) == 15
+    # fodo_channel: the BeginningEle, then fodo_cell repeated 3 times
+    assert flat[0]["kind"] == "BeginningEle"
+    assert len(flat) == 1 + 15
 
 
 def test_inherit():
@@ -66,8 +68,8 @@ def test_inherit():
     # quad1: Bn1=1.0, quad2: Bn1=-1.0 (inherits quad1, overrides Bn1)
     q1 = quads[0]
     q2 = quads[1]
-    assert q1["bn1"] == pytest.approx(1.0)
-    assert q2["bn1"] == pytest.approx(-1.0)
+    assert q1["bn"][1] == pytest.approx(1.0)
+    assert q2["bn"][1] == pytest.approx(-1.0)
 
 
 def test_quadrupole_bn1(fodo):
@@ -77,10 +79,10 @@ def test_quadrupole_bn1(fodo):
     assert len(quads) == 6  # 2 quads per cell × 3 cells
     # All QPF quads have Bn1=1.0
     qpf = [q for q in quads if q["type"] == "QPF"]
-    assert all(q["bn1"] == pytest.approx(1.0) for q in qpf)
+    assert all(q["bn"][1] == pytest.approx(1.0) for q in qpf)
     # All QPD quads have Bn1=-1.0
     qpd = [q for q in quads if q["type"] == "QPD"]
-    assert all(q["bn1"] == pytest.approx(-1.0) for q in qpd)
+    assert all(q["bn"][1] == pytest.approx(-1.0) for q in qpd)
 
 
 def test_cumulative_positions(fodo):
@@ -337,18 +339,22 @@ def test_solenoid_emitted_as_drift():
 
 # --- QA4: Warning path coverage ---
 
-def test_negative_repeat_raises():
-    """Negative repeat is unsupported and raises ValueError."""
+def test_negative_repeat_reverses_order():
+    """Negative repeat reverses the element order (no direction reversal)."""
     import yaml, tempfile
     pals_data = {
         "PALS": {
             "version": None,
             "facility": [
                 {"d1": {"kind": "Drift", "length": 1.0}},
-                {"cell": {"kind": "BeamLine", "line": ["d1"]}},
+                {"b1": {"kind": "Bend", "length": 1.0,
+                        "BendP": {"g_ref": 0.1, "e1": 0.02, "e2": 0.07}}},
+                {"q1": {"kind": "Quadrupole", "length": 0.5,
+                        "MagneticMultipoleP": {"Bn1": 2.0}}},
+                {"cell": {"kind": "BeamLine", "line": ["d1", "b1", "q1"]}},
                 {"main": {
                     "kind": "BeamLine",
-                    "line": [{"cell": {"repeat": -3}}],
+                    "line": [{"cell": {"repeat": -2}}],
                 }},
             ]
         }
@@ -357,10 +363,14 @@ def test_negative_repeat_raises():
         yaml.dump(pals_data, f)
         tmp_path = f.name
     try:
-        with pytest.raises(ValueError, match="negative repeat"):
-            parse_lattice(tmp_path, ke_override=1000,
-                          particle_override="proton",
-                          beamline_name="main")
+        _, elements = parse_lattice(tmp_path, ke_override=1000,
+                                    particle_override="proton",
+                                    beamline_name="main")
+        assert [e["name"] for e in elements] == ["q1", "b1", "d1"] * 2
+        bend = elements[1]
+        # PALS: e1 stays the upstream face, e2 the downstream face.
+        assert bend["entrance_edge_angle"] == pytest.approx(math.degrees(0.02))
+        assert bend["exit_edge_angle"] == pytest.approx(math.degrees(0.07))
     finally:
         os.unlink(tmp_path)
 
@@ -448,21 +458,19 @@ def test_default_particle_warns():
         os.unlink(tmp_path)
 
 
-def test_unknown_species_mass_warns():
-    """Unknown particle species from lattice file emits a mass fallback warning."""
+def test_unknown_species_raises():
+    """An unknown species in the lattice file is an error."""
     import yaml, tempfile
     pals_data = {
         "PALS": {
             "version": None,
             "facility": [
-                {"d1": {"kind": "Drift", "length": 1.0}},
-                {"main": {"kind": "BeamLine", "line": ["d1"]}},
-                {"lat": {
-                    "kind": "Lattice",
-                    "particle": {"species": "tachyon", "kinetic_energy": 500e6},
-                    "branches": ["main"],
-                }},
-                {"use": "lat"},
+                {"main": {"kind": "BeamLine", "line": [
+                    {"begin": {"kind": "BeginningEle",
+                               "ReferenceP": {"species_ref": "tachyon",
+                                              "E_tot_ref": 1e9}}},
+                    {"d1": {"kind": "Drift", "length": 1.0}},
+                ]}},
             ]
         }
     }
@@ -470,11 +478,8 @@ def test_unknown_species_mass_warns():
         yaml.dump(pals_data, f)
         tmp_path = f.name
     try:
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            bp, _ = parse_lattice(tmp_path)
-        assert any("Unknown particle species" in str(x.message) for x in w)
-        assert bp["particle_type"] == "tachyon"
+        with pytest.raises(ValueError, match="Unknown particle species 'tachyon'"):
+            parse_lattice(tmp_path)
     finally:
         os.unlink(tmp_path)
 

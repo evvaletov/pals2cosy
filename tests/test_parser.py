@@ -189,7 +189,7 @@ def test_v3_bn1_quad_extracted():
     try:
         _, elements = parse_lattice(path)
         q = [e for e in elements if e["type"] == "QPF"][0]
-        assert q["bn1"] == pytest.approx(-0.05)
+        assert q["b_pole"][1] == pytest.approx(-0.05)
     finally:
         os.unlink(path)
 

@@ -72,8 +72,10 @@ class TestFODORoundTrip:
     def setup(self):
         """Generate COSYScript from FODO PALS example.
 
-        Uses quad_aperture=1.0 m (bore diameter) to give a stable cell.
-        With Bn1=1.0 T and R=0.5 m: G=2 T/m, f≈2.83 m at 1 GeV proton.
+        Bn1 = 1.0 T/m is the PALS field gradient; quad_aperture only sets the
+        radius at which COSY's pole-tip field is given. At 1 GeV kinetic
+        energy (Brho = 5.66 T m) the 1 m quadrupoles have f = 5.66 m and the
+        3 m cell is stable.
         """
         bp, elems = parse_pals(FODO_YAML, ke_override=1000,
                                particle_override="proton")

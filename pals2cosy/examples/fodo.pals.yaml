@@ -1,7 +1,11 @@
-# This is a PALS example of beamline with three identical FODO cells.
+# A beamline of three identical FODO cells, adapted from the PALS example
+# examples/fodo.pals.yaml (github.com/pals-project/pals). A BeginningEle has
+# been added to set the reference particle, so the file converts without
+# --ke/--particle.
 #
 # This example demonstrates:
 # - definition of individual elements
+# - a BeginningEle carrying the reference particle (ReferenceP)
 # - definition of a short line (fodo_cell) that:
 #   - uses pre-defined elements (drift1, quad1)
 #   - inherits & changes an element (quad2)
@@ -10,19 +14,25 @@
 #   - repeats a line (fodo_cell) three times
 #
 PALS:
-  version: null  # later, we will put the version of the PALS standard here
+  version: null
 
   facility:
+    - start:
+        kind: BeginningEle
+        ReferenceP:
+          species_ref: proton
+          E_tot_ref: 1938.27208816e6   # [eV] 1 GeV kinetic + proton rest energy
+
     - drift1:
         kind: Drift
         length: 0.25
-  
+
     - quad1:
         kind: Quadrupole
         MagneticMultipoleP:
-          Bn1: 1.0
+          Bn1: 1.0                     # [T/m] field gradient
         length: 1.0
-  
+
     - fodo_cell:
         kind: BeamLine
         line:
@@ -36,10 +46,11 @@ PALS:
               MagneticMultipoleP:
                 Bn1: -1.0
           - drift1
-  
+
     - fodo_channel:
         kind: BeamLine
         line:
+          - start
           - fodo_cell:
               repeat: 3
 

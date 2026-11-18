@@ -1,13 +1,21 @@
-# Beamline excerpt in official PALS format.
+# Beamline excerpt from the University of Hawaii FEL, in PALS format.
 #
-# Linac quadrupoles + first chicane dipole, demonstrating
-# MagneticMultipoleP.Bn1 for quads and BendP for SBend.
+# Linac quadrupoles and the first chicane dipole. Quadrupole strengths are
+# PALS field gradients Bn1 = -G*I [T/m] from the magnet calibration
+# G = 2.694 T/(A m) and the setpoint currents; for electrons a negative Bn1
+# focuses horizontally.
 #
 PALS:
   version: null
 
   facility:
     # --- Element definitions ---
+
+    - start:
+        kind: BeginningEle
+        ReferenceP:
+          species_ref: electron
+          E_tot_ref: 40.51099895e6   # [eV] 40 MeV kinetic + electron rest energy
 
     - d_pre_lin:
         kind: Drift
@@ -17,7 +25,7 @@ PALS:
         kind: Quadrupole
         length: 0.0889
         MagneticMultipoleP:
-          Bn1: -0.03221273  # QPF: Bn1 = -G*I*r = -2.694*0.8857*0.0135
+          Bn1: -2.38612815   # QPF: -2.694 T/(A m) * 0.8857 A
 
     - d_lin_12:
         kind: Drift
@@ -27,7 +35,7 @@ PALS:
         kind: Quadrupole
         length: 0.0889
         MagneticMultipoleP:
-          Bn1: 0.03829256   # QPD: Bn1 = +G*I*r = 2.694*1.0529*0.0135
+          Bn1: 2.83648593    # QPD: 2.694 T/(A m) * 1.0529 A
 
     - d_lin_post:
         kind: Drift
@@ -37,25 +45,26 @@ PALS:
         kind: Quadrupole
         length: 0.0889
         MagneticMultipoleP:
-          Bn1: -0.13880606  # QPF
+          Bn1: -10.28193037  # QPF
 
     - d_pre_dc1:
         kind: Drift
         length: 0.71013
 
     - DC1_B1:
-        kind: SBend
+        kind: Bend
         length: 0.0889
         BendP:
-          g_ref: 0.29476    # 1/m → angle = g_ref × L = 1.5° = 0.02618 rad
+          angle_ref: 0.02618   # 1.5 deg
           e1: 0.0
-          e2: 0.02618       # 1.5° in radians
+          e2: 0.02618          # parallel pole faces
 
     # --- Beamline composition ---
 
     - uhfel_excerpt:
         kind: BeamLine
         line:
+          - start
           - d_pre_lin
           - LQ1
           - d_lin_12

@@ -8,8 +8,11 @@ import re
 import warnings
 import pytest
 
+from pals2cosy._elements import blank_element
 from pals2cosy.parser import parse_lattice
 from pals2cosy.converter import convert, _consolidate_dipoles, _format_enge
+
+R = 0.0135  # default bore radius (quad_aperture / 2)
 
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -341,19 +344,19 @@ def test_override_order():
 
 
 def test_bn1_quad_fox():
-    """MQ command uses Bn1 directly when present (no current_a computation)."""
+    """MQ pole-tip field is the PALS gradient Bn1 [T/m] times the bore radius."""
     from pals2cosy.pals_parser import parse_lattice as parse_pals
     pals_file = os.path.join(EXAMPLES_DIR, "uhfel_excerpt.pals.yaml")
-    bp, elems = parse_pals(pals_file, ke_override=40, particle_override="electron")
-    fox = convert(bp, elems, ke_override=40, particle_override="electron")
+    bp, elems = parse_pals(pals_file)
+    fox = convert(bp, elems)
     mq_lines = _extract_commands(fox, r'MQ')
     assert len(mq_lines) == 3  # LQ1, LQ2, DPHQ
-    # LQ1: Bn1=-0.03221273, length=0.0889
+    # LQ1: Bn1 = -G*I = -2.694*0.8857 T/m
     parts = mq_lines[0].split()
-    assert float(parts[2]) == pytest.approx(-0.03221273, rel=1e-6)
-    # LQ2: Bn1=0.03829256
+    assert float(parts[2]) == pytest.approx(-2.386 * R, rel=1e-3)
+    # LQ2: Bn1 = +2.694*1.0529 T/m
     parts = mq_lines[1].split()
-    assert float(parts[2]) == pytest.approx(0.03829256, rel=1e-6)
+    assert float(parts[2]) == pytest.approx(2.8365 * R, rel=1e-3)
 
 
 def test_fodo_fox():
@@ -366,26 +369,27 @@ def test_fodo_fox():
     mq_lines = _extract_commands(fox, r'MQ')
     # 6 quads (2 per cell × 3 cells)
     assert len(mq_lines) == 6
-    # First quad: Bn1=1.0
+    # First quad: Bn1 = 1.0 T/m -> pole tip 1.0 * r
     parts = mq_lines[0].split()
-    assert float(parts[2]) == pytest.approx(1.0)
-    # Second quad: Bn1=-1.0
+    assert float(parts[2]) == pytest.approx(1.0 * R)
+    # Second quad: Bn1 = -1.0 T/m
     parts = mq_lines[1].split()
-    assert float(parts[2]) == pytest.approx(-1.0)
+    assert float(parts[2]) == pytest.approx(-1.0 * R)
 
 
 def test_uhfel_excerpt_dipole():
     """UH FEL excerpt SBend produces correct DIL command."""
     from pals2cosy.pals_parser import parse_lattice as parse_pals
     pals_file = os.path.join(EXAMPLES_DIR, "uhfel_excerpt.pals.yaml")
-    bp, elems = parse_pals(pals_file, ke_override=40, particle_override="electron")
-    fox = convert(bp, elems, ke_override=40, fringe_field_order=0)
+    bp, elems = parse_pals(pals_file)
+    fox = convert(bp, elems, fringe_field_order=0)
     dil_lines = _extract_commands(fox, r'DIL')
     assert len(dil_lines) == 1
-    # DC1_B1: angle ≈ 1.5°
+    # DC1_B1: angle_ref = 0.02618 rad = 1.5°, e2 = angle (parallel faces)
     parts = dil_lines[0].split()
-    angle = float(parts[2])
-    assert angle == pytest.approx(1.5, rel=0.02)  # g_ref×L ≈ 1.501°
+    assert float(parts[2]) == pytest.approx(1.5, rel=1e-4)
+    assert float(parts[4]) == pytest.approx(0.0)
+    assert float(parts[6]) == pytest.approx(1.5, rel=1e-4)
 
 
 def test_beamline_total_length(fox_output):
@@ -522,9 +526,11 @@ def test_antimuon_uses_rp_not_rpmu():
           "quad_gradient": 2.694, "source_file": "test"}
     elements = [{"type": "DRIFT", "name": "", "length": 0.5,
                  "s_start": 0.0, "s_end": 0.5}]
-    for name in ("mu+", "antimuon"):
+    for name in ("mu+", "antimuon", "anti-muon"):
         fox = convert(bp, elements, particle_override=name)
-        assert "RP 200 0.1134289168 1 ;" in fox
+        mass, charge = _rp_mass_charge(fox, 200)
+        assert mass == pytest.approx(0.1134289168, rel=1e-6)
+        assert charge == 1
         assert "RPMU" not in fox
 
 
@@ -535,9 +541,17 @@ def test_generic_particle():
     elements = [{"type": "DRIFT", "name": "", "length": 0.5,
                  "s_start": 0.0, "s_end": 0.5}]
     fox = convert(bp, elements, particle_override="positron")
-    assert "RP 500 0.000548579911 1 ;" in fox
+    assert _rp_mass_charge(fox, 500) == (pytest.approx(5.48579911e-4, rel=1e-7), 1)
     fox2 = convert(bp, elements, particle_override="deuteron")
-    assert "RP 500 2.01355321271 1 ;" in fox2
+    assert _rp_mass_charge(fox2, 500) == (pytest.approx(2.01355321271, rel=1e-7), 1)
+    fox3 = convert(bp, elements, particle_override="#12C+6")
+    assert _rp_mass_charge(fox3, 500) == (pytest.approx(12 - 6 * 5.48579909e-4, rel=1e-7), 6)
+
+
+def _rp_mass_charge(fox, ke):
+    line = next(l.strip() for l in fox.splitlines() if l.strip().startswith(f"RP {ke} "))
+    _, _, mass, charge, _ = line.split()
+    return float(mass), int(charge)
 
 
 def test_particle_case_insensitive():
@@ -564,18 +578,12 @@ def test_unknown_particle_raises():
 
 def test_sextupole_with_bn2():
     """Sextupole with Bn2 generates MH command."""
-    elements = [
-        {"type": "SXT", "name": "S1", "length": 0.2,
-         "s_start": 0.0, "s_end": 0.2, "bn2": 0.5,
-         "bn1": None, "bz": None, "current": None, "angle": None,
-         "wedge_angle": None, "entrance_edge_angle": None,
-         "exit_edge_angle": None, "pole_gap": None, "dipole_length": None,
-         "enge_coeffs": None},
-    ]
+    elem = blank_element("SXT", "S1", 0.2, 0.0, 0.2)
+    elem["bn"] = {2: 0.5}
     bp = {"kinetic_energy_mev": 40, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
-    fox = convert(bp, elements)
-    assert "MH 0.2 0.5 0.0135 ;" in fox
+    fox = convert(bp, [elem])
+    assert f"MH 0.2 {0.5 * R**2 / 2} 0.0135 ;" in fox
 
 
 def test_sextupole_without_bn2():
@@ -613,19 +621,12 @@ def test_solenoid_with_bz():
 
 def test_octupole_with_bn3():
     """Octupole with Bn3 generates MO command."""
-    elements = [
-        {"type": "OCT", "name": "O1", "length": 0.15,
-         "s_start": 0.0, "s_end": 0.15, "bn3": 0.3,
-         "bn1": None, "bn2": None, "bz": None, "current": None, "angle": None,
-         "wedge_angle": None, "entrance_edge_angle": None,
-         "exit_edge_angle": None, "pole_gap": None, "dipole_length": None,
-         "enge_coeffs": None, "rf_voltage_kv": None, "rf_frequency_hz": None,
-         "rf_phase_deg": None},
-    ]
+    elem = blank_element("OCT", "O1", 0.15, 0.0, 0.15)
+    elem["bn"] = {3: 0.3}
     bp = {"kinetic_energy_mev": 40, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
-    fox = convert(bp, elements)
-    assert "MO 0.15 0.3 0.0135 ;" in fox
+    fox = convert(bp, [elem])
+    assert f"MO 0.15 {0.3 * R**3 / 6} 0.0135 ;" in fox
 
 
 def test_octupole_without_bn3():
@@ -661,7 +662,12 @@ def test_rf_cavity_with_params():
     bp = {"kinetic_energy_mev": 40, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
     fox = convert(bp, elements)
-    assert "RF 100.0 0 2856000000.0 90.0 0.0135 ;" in fox
+    assert "VARIABLE PALSRFV 1 1 1 ;" in fox
+    body = [l.strip() for l in fox.splitlines()]
+    i = body.index("PALSRFV(1,1) := 100.0 ;")
+    assert body[i - 1] == "DL 0.25 ;"
+    assert body[i + 1].startswith("RF PALSRFV 0 2856000000.0 90.0 0.0135 ;")
+    assert body[i + 2] == "DL 0.25 ;"
 
 
 def test_rf_cavity_without_params():
@@ -685,20 +691,22 @@ def test_rf_cavity_without_params():
 
 def test_multipole_with_harmonics():
     """Multipole with Bn fields generates M5 command."""
-    elements = [
-        {"type": "MULT", "name": "M1", "length": 0.2,
-         "s_start": 0.0, "s_end": 0.2,
-         "bn1": 0.5, "bn2": 0.1, "bn3": 0.05, "bn4": None, "bn5": None,
-         "bz": None, "current": None, "angle": None,
-         "wedge_angle": None, "entrance_edge_angle": None,
-         "exit_edge_angle": None, "pole_gap": None, "dipole_length": None,
-         "enge_coeffs": None, "rf_voltage_kv": None, "rf_frequency_hz": None,
-         "rf_phase_deg": None},
-    ]
+    elem = blank_element("MULT", "M1", 0.2, 0.0, 0.2)
+    elem["bn"] = {1: 0.5, 2: 0.1, 3: 0.05}
     bp = {"kinetic_energy_mev": 40, "particle_type": "electron",
           "quad_gradient": 2.694, "source_file": "test"}
-    fox = convert(bp, elements)
-    assert "M5 0.2 0.5 0.1 0.05 0 0 0.0135 ;" in fox
+    fox = convert(bp, [elem])
+    assert f"M5 0.2 {0.5 * R} {0.1 * R**2 / 2} {0.05 * R**3 / 6} 0 0 0.0135 ;" in fox
+
+
+def test_pole_tip_legacy_flat_format():
+    """Flat-format b_pole values are COSY pole-tip fields, emitted unchanged."""
+    elem = blank_element("MULT", "M1", 0.2, 0.0, 0.2)
+    elem["b_pole"] = {1: 0.5, 2: 0.1}
+    bp = {"kinetic_energy_mev": 40, "particle_type": "electron",
+          "quad_gradient": 2.694, "source_file": "test"}
+    fox = convert(bp, [elem])
+    assert "M5 0.2 0.5 0.1 0 0 0 0.0135 ;" in fox
 
 
 def test_multipole_without_harmonics():

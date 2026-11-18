@@ -12,6 +12,7 @@ import os
 import warnings
 
 from ._io import load_file as _load_file
+from ._elements import blank_element
 from .constants import E0_ELECTRON, G_QUAD_DEFAULT, F_RF_DEFAULT
 
 # Type resolution table: raw type -> internal short name.
@@ -200,51 +201,17 @@ def _normalize_element(raw, mode="felsim"):
     params = raw.get("parameters", {})
     name = raw.get("name", "")
 
-    elem = {
-        "type": internal_type,
-        "name": name,
-        "length": length,
-        "s_start": s_start,
-        "s_end": s_end,
-        "current": params.get("current_a"),
-        "angle": None,
-        "wedge_angle": None,
-        "entrance_edge_angle": None,
-        "exit_edge_angle": None,
-        "pole_gap": None,
-        "dipole_length": None,
-        "enge_coeffs": None,
-        "bn1": None,
-        "bn2": None,
-        "bn3": None,
-        "bn4": None,
-        "bn5": None,
-        "bz": None,
-        "rf_voltage_kv": None,
-        "rf_frequency_hz": None,
-        "rf_phase_deg": None,
-        "wiggler_field": None,
-        "wiggler_period": None,
-    }
+    elem = blank_element(internal_type, name, length, s_start, s_end)
+    elem["current"] = params.get("current_a")
 
-    # MagneticMultipoleP for quadrupoles, sextupoles, octupoles
+    # MagneticMultipoleP.Bn1-Bn5 in this format are pole-tip fields [T]
+    # (FELsim convention), not the PALS field derivatives [T/m^N].
     mmp = raw.get("MagneticMultipoleP")
     if mmp is not None:
-        bn1 = mmp.get("Bn1")
-        if bn1 is not None:
-            elem["bn1"] = float(bn1)
-        bn2 = mmp.get("Bn2")
-        if bn2 is not None:
-            elem["bn2"] = float(bn2)
-        bn3 = mmp.get("Bn3")
-        if bn3 is not None:
-            elem["bn3"] = float(bn3)
-        bn4 = mmp.get("Bn4")
-        if bn4 is not None:
-            elem["bn4"] = float(bn4)
-        bn5 = mmp.get("Bn5")
-        if bn5 is not None:
-            elem["bn5"] = float(bn5)
+        for order in range(1, 6):
+            value = mmp.get(f"Bn{order}")
+            if value is not None:
+                elem["b_pole"][order] = float(value)
 
     # Wiggler/undulator parameters
     wig_p = raw.get("WigglerP")
@@ -316,29 +283,4 @@ def _normalize_element(raw, mode="felsim"):
 
 
 def _make_drift(length):
-    return {
-        "type": "DRIFT",
-        "name": "",
-        "length": length,
-        "s_start": None,
-        "s_end": None,
-        "current": None,
-        "angle": None,
-        "wedge_angle": None,
-        "entrance_edge_angle": None,
-        "exit_edge_angle": None,
-        "pole_gap": None,
-        "dipole_length": None,
-        "enge_coeffs": None,
-        "bn1": None,
-        "bn2": None,
-        "bn3": None,
-        "bn4": None,
-        "bn5": None,
-        "bz": None,
-        "rf_voltage_kv": None,
-        "rf_frequency_hz": None,
-        "rf_phase_deg": None,
-        "wiggler_field": None,
-        "wiggler_period": None,
-    }
+    return blank_element("DRIFT", "", length)

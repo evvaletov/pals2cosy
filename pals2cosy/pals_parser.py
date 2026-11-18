@@ -1,7 +1,16 @@
 """Parse official PALS format (``PALS:`` root) into normalized element lists.
 
-Handles ``facility:`` element definitions and ``BeamLine`` composition with
-``line:`` references, ``inherit:`` overrides, and ``repeat:`` expansion.
+Reads documents written against the PALS specification
+(github.com/pals-project/pals, see ``pals2cosy.__pals_commit__``): the
+``facility`` list with element, ``BeamLine`` and ``Lattice`` definitions,
+``use``, constants and variables, expressions, ``inherit`` and ``repeat``
+(including negative repeats, which reverse the element order), and the
+reference particle of the branch's ``BeginningEle``. Constructs that change
+the lattice in ways a single COSY INFINITY transfer map cannot follow raise
+``UnsupportedFeatureError``; those that leave the converted branch intact
+(other branches, Forks, multipass bookkeeping, adjustments, RELATIVE
+controllers, girders) are reported with ``PALSConversionWarning``.
+
 Produces the same (beam_params, elements) tuple as ``parser.parse_lattice()``.
 
 Author: Eremey Valetov
@@ -12,7 +21,34 @@ import os
 import warnings
 
 from ._io import load_file as _load_file
-from .constants import E0_ELECTRON, E0_PROTON, F_RF_DEFAULT, PARTICLE_MASSES_MEV
+from ._version import __pals_commit__
+from .constants import C_LIGHT, F_RF_DEFAULT
+from .diagnostics import (
+    PALSConversionWarning, PALSDeprecationWarning, PALSReminder,
+    UnsupportedFeatureError,
+)
+from .expressions import Scope
+from .pals_elements import ElementContext, ExtensionLabels, normalize_element
+from .species import parse_species
+
+# Major versions of the PALS schema this release understands. The standard
+# has not fixed a versioning scheme yet; files carry null, 0.x or 1.x.
+KNOWN_MAJOR_VERSIONS = (0, 1)
+
+_ROOT_KEYS = frozenset({
+    "adjustments", "authors", "extension_labels", "facility", "girders",
+    "include", "load", "notes", "phase_space_coordinates", "post_expansion",
+    "reminders", "version",
+})
+
+
+# Kinds that never appear in the tracked element sequence: the branch's
+# BeginningEle only carries initial values, and expansion removes Placeholders.
+_BOOKKEEPING_KINDS = ("BeginningEle", "Placeholder")
+
+
+def _warn(message):
+    warnings.warn(message, PALSConversionWarning, stacklevel=3)
 
 
 def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=None):
@@ -23,11 +59,13 @@ def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=
     path : str
         Path to ``.pals.yaml`` or ``.pals.json`` file.
     beamline_name : str or None
-        Which BeamLine to expand. Default: last ``BeamLine`` in facility.
+        Branch of the selected Lattice, or any BeamLine, to expand. Default:
+        the first branch of the Lattice named by the last ``use`` (else the
+        last Lattice; else the last BeamLine).
     ke_override : float or None
-        Kinetic energy in MeV (required if not in lattice file).
+        Kinetic energy in MeV, overriding the file's reference energy.
     particle_override : str or None
-        Particle type override (``"electron"`` or ``"proton"``).
+        Reference species, overriding ``ReferenceP.species_ref``.
 
     Returns
     -------
@@ -50,423 +88,468 @@ def parse_lattice(path, beamline_name=None, ke_override=None, particle_override=
             f"PALS file '{path}': 'PALS' must be a mapping, "
             f"got {type(pals).__name__}"
         )
-    facility_list = pals.get("facility", [])
 
-    # Build name→definition index from the facility list
-    catalog = _build_catalog(facility_list)
+    labels = ExtensionLabels(pals.get("extension_labels"))
+    version = _check_root(pals, labels)
+    facility = _Facility(pals.get("facility") or [], labels)
+    branch, root, periodic = facility.select_branch(beamline_name)
+    flat = _expand_beamline(root, facility.catalog)
 
-    # Select beamline to expand
-    bl_name = beamline_name or _find_default_beamline(catalog, facility_list)
-    if bl_name not in catalog:
-        raise ValueError(f"BeamLine '{bl_name}' not found in facility")
+    ctx = ElementContext(facility.scope, facility.catalog, labels, None, 0.0)
+    species, kinetic_energy = _reference(flat, facility, ctx, ke_override,
+                                         particle_override)
+    ctx.species = species
+    ctx.e_tot_ev = (kinetic_energy + species.mass_mev) * 1e6
+    brho = ctx.brho
+    pc_mev = ctx.pc_ev / 1e6
 
-    # Expand beamline into a flat element sequence
-    flat = _expand_beamline(bl_name, catalog)
+    elements, transit_time = _position_and_normalize(flat, ctx)
 
-    # Extract beam parameters
-    beam_params = _extract_beam_params(catalog, facility_list, path,
-                                       ke_override, particle_override)
+    return {
+        "kinetic_energy_mev": kinetic_energy,
+        "particle_type": species.name,
+        "mass_mev": species.mass_mev,
+        "charge": species.charge,
+        "pc_mev": pc_mev,
+        "brho_tm": brho,
+        "rf_frequency_hz": F_RF_DEFAULT,
+        "quad_gradient": None,  # Not needed for PALS multipoles
+        "source_file": os.path.basename(path),
+        "pals_version": version,
+        "branch": branch,
+        "periodic": bool(periodic),
+        "branch_time_s": transit_time,
+    }, elements
 
-    # Compute cumulative positions and normalize
-    elements = _position_and_normalize(flat)
 
-    return beam_params, elements
+# -----------------------------------------------------------------------
+# Document level
+# -----------------------------------------------------------------------
+
+def _check_root(pals, labels):
+    for key, value in pals.items():
+        if key in ("include", "load"):
+            raise UnsupportedFeatureError(
+                f"PALS '{key}' is not supported; combine the lattice into a single "
+                f"self-contained document")
+        if key == "post_expansion" and value:
+            raise UnsupportedFeatureError(
+                "PALS 'post_expansion' is not supported (it modifies the expanded "
+                "lattice, which pals2cosy converts as defined in 'facility')")
+        if key == "adjustments" and value:
+            _warn("PALS 'adjustments' are not applied; the lattice is converted with "
+                  "the parameter values as written")
+        if key == "girders" and value:
+            _warn("PALS 'girders' are not represented (girder alignment shifts are "
+                  "ignored)")
+        if key not in _ROOT_KEYS and not labels.matches(key):
+            _warn(f"Unknown PALS root key '{key}' ignored")
+    for reminder in pals.get("reminders") or []:
+        warnings.warn(f"PALS reminder: {reminder}", PALSReminder, stacklevel=3)
+    return _check_version(pals.get("version"))
+
+
+def _check_version(version):
+    if version is None:
+        return None
+    text = str(version)
+    for part in text.split(","):
+        part = part.strip()
+        try:
+            major = int(part.split(".")[0])
+        except ValueError:
+            _warn(f"Unrecognized PALS version '{part}'")
+            continue
+        if major not in KNOWN_MAJOR_VERSIONS:
+            _warn(f"PALS version '{part}' has major version {major}; pals2cosy targets "
+                  f"the PALS specification at commit {__pals_commit__} "
+                  f"(major versions {', '.join(map(str, KNOWN_MAJOR_VERSIONS))})")
+    return text
+
+
+class _Facility:
+    """Definitions from the ``facility`` list, indexed by name."""
+
+    def __init__(self, facility_list, labels=None):
+        if not isinstance(facility_list, list):
+            raise ValueError("PALS 'facility' must be a list")
+        self.labels = labels or ExtensionLabels()
+        self.catalog = {}
+        self.order = []
+        self.uses = []
+        self.definitions = {}
+        for item in facility_list:
+            if not isinstance(item, dict):
+                raise ValueError(f"Malformed facility entry {item!r}")
+            for key, value in item.items():
+                self._entry(key, value)
+        self.scope = Scope(self.definitions, self._parameter)
+
+    def _entry(self, key, value):
+        if key == "use":
+            self.uses.append(value)
+        elif key in ("constants", "variables"):
+            for entry in [value] if isinstance(value, dict) else value or []:
+                if not isinstance(entry, dict):
+                    raise ValueError(f"Malformed '{key}' entry {entry!r}")
+                for name, raw in entry.items():
+                    self._define(name, raw)
+        elif key in ("set", "sets"):
+            raise UnsupportedFeatureError(
+                f"PALS '{key}' commands are not supported; write the parameter "
+                f"values into the element definitions")
+        elif key == "superimpose":
+            raise UnsupportedFeatureError("PALS superposition is not supported")
+        elif key == "include":
+            raise UnsupportedFeatureError(
+                "PALS 'include' is not supported; combine the lattice into a single "
+                "self-contained document")
+        elif not isinstance(value, dict):
+            if not self.labels.matches(key):
+                _warn(f"Facility entry '{key}' is not a definition; ignored")
+        elif "extension" in value:
+            return
+        elif value.get("kind") in ("constant", "variable"):
+            if "value" not in value:
+                raise ValueError(f"{value['kind'].capitalize()} '{key}' has no value")
+            self._define(key, value["value"])
+        elif value.get("kind") == "Controller":
+            control = value.get("control_type", "ABSOLUTE")
+            if control == "RELATIVE":
+                _warn(f"RELATIVE Controller '{key}' ignored (it does not change the "
+                      f"lattice as read)")
+            else:
+                raise UnsupportedFeatureError(
+                    f"{control} Controller '{key}' sets lattice parameters; "
+                    f"Controllers are not supported")
+        else:
+            if key in self.catalog:
+                raise ValueError(f"'{key}' is defined more than once in the facility")
+            self.catalog[key] = value
+            self.order.append(key)
+
+    def _define(self, name, raw):
+        previous = self.definitions.get(name)
+        if previous is not None and previous != raw:
+            raise ValueError(
+                f"Constant or variable '{name}' is redefined with a different value "
+                f"({previous!r} and {raw!r})")
+        self.definitions[name] = raw
+
+    def _parameter(self, name, path):
+        if name not in self.catalog:
+            raise KeyError(f"no element '{name}'")
+        node = _definition(name, self.catalog)
+        for part in path.split("."):
+            if not isinstance(node, dict) or node.get(part) is None:
+                raise KeyError(f"'{name}' has no parameter {path} set")
+            node = node[part]
+        return node
+
+    def select_branch(self, beamline_name=None):
+        """Return (branch name, root BeamLine name, periodic) to convert."""
+        lattice = None
+        for target in reversed(self.uses):
+            if self.catalog.get(target, {}).get("kind") != "Lattice":
+                raise ValueError(f"'use: {target}' does not name a Lattice")
+            lattice = target
+            break
+        if lattice is None:
+            lattices = [n for n in self.order if self.catalog[n].get("kind") == "Lattice"]
+            lattice = lattices[-1] if lattices else None
+        branches = self._branches(lattice) if lattice else []
+
+        if beamline_name is not None:
+            for branch in branches:
+                if branch[0] == beamline_name:
+                    return branch
+            defn = self.catalog.get(beamline_name)
+            if defn is not None and defn.get("kind") == "BeamLine":
+                return beamline_name, beamline_name, defn.get("periodic", False)
+            raise ValueError(f"BeamLine '{beamline_name}' not found in facility")
+
+        if branches:
+            if len(branches) > 1:
+                others = ", ".join(b[0] for b in branches[1:])
+                _warn(f"Lattice '{lattice}' has {len(branches)} branches; converting "
+                      f"'{branches[0][0]}' (other branches: {others}; select one "
+                      f"with --beamline)")
+            return branches[0]
+        beamlines = [n for n in self.order if self.catalog[n].get("kind") == "BeamLine"]
+        if beamlines:
+            name = beamlines[-1]
+            return name, name, self.catalog[name].get("periodic", False)
+        raise ValueError("No BeamLine found in facility")
+
+    def _branches(self, lattice):
+        result = []
+        for entry in self.catalog[lattice].get("branches") or []:
+            if isinstance(entry, str):
+                bname, spec = entry, {}
+            elif isinstance(entry, dict) and len(entry) == 1:
+                bname, spec = next(iter(entry.items()))
+                spec = spec or {}
+            else:
+                raise ValueError(f"Lattice '{lattice}': malformed branch entry {entry!r}")
+            if spec.get("kind") == "BeamLine" or "line" in spec:
+                if bname in self.catalog and self.catalog[bname] is not spec:
+                    raise ValueError(f"'{bname}' is defined more than once")
+                self.catalog[bname] = spec
+                root = bname
+            else:
+                root = spec.get("inherit", bname)
+            if self.catalog.get(root, {}).get("kind") != "BeamLine":
+                raise ValueError(
+                    f"Lattice '{lattice}': branch '{bname}' has no root BeamLine '{root}'")
+            periodic = spec.get("periodic", self.catalog[root].get("periodic", False))
+            result.append((bname, root, periodic))
+        return result
 
 
 def _build_catalog(facility_list):
-    """Index facility items by name → definition dict."""
-    catalog = {}
-    for item in facility_list:
-        if not isinstance(item, dict):
-            continue
-        # Skip 'use' directives
-        if "use" in item:
-            continue
-        for name, defn in item.items():
-            if isinstance(defn, dict):
-                catalog[name] = defn
-    return catalog
+    """Index facility definitions by name."""
+    return _Facility(facility_list).catalog
 
 
-def _find_default_beamline(catalog, facility_list):
-    """Find the last BeamLine defined in the facility (not Lattice)."""
-    # First check for a 'use' directive pointing to a Lattice
-    for item in reversed(facility_list):
-        if isinstance(item, dict) and "use" in item:
-            lattice_name = item["use"]
-            if lattice_name in catalog:
-                lat = catalog[lattice_name]
-                branches = lat.get("branches", [])
-                if branches:
-                    # First branch
-                    br = branches[0]
-                    if isinstance(br, str):
-                        return br
-                    elif isinstance(br, dict) and br:
-                        return next(iter(br))
+# -----------------------------------------------------------------------
+# Branch expansion
+# -----------------------------------------------------------------------
 
-    # Fall back to last BeamLine in catalog
-    last_bl = None
-    for item in facility_list:
-        if not isinstance(item, dict):
-            continue
-        for name, defn in item.items():
-            if isinstance(defn, dict) and defn.get("kind") == "BeamLine":
-                last_bl = name
-    if last_bl:
-        return last_bl
-    raise ValueError("No BeamLine found in facility")
+def _merge(base, override):
+    """Override ``base`` with ``override``, merging parameter groups one level deep."""
+    merged = {**base, **override}
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merged[key] = {**base[key], **value}
+    return merged
+
+
+def _definition(name, catalog, seen=()):
+    """Facility definition of ``name`` with element-level ``inherit`` applied."""
+    defn = catalog[name]
+    target = defn.get("inherit")
+    if target is None:
+        return defn
+    if target == name or target in seen:
+        raise ValueError(f"Circular inherit: {' -> '.join(seen + (name, target))}")
+    if target not in catalog:
+        raise ValueError(f"Unresolved inherit reference: '{target}'")
+    base = _definition(target, catalog, seen + (name,))
+    return _merge(base, {k: v for k, v in defn.items() if k != "inherit"})
 
 
 def _expand_beamline(name, catalog, _stack=None):
     """Recursively expand a BeamLine into a flat list of element dicts."""
-    if _stack is None:
-        _stack = set()
-    if name in _stack:
-        raise ValueError(f"Circular reference in BeamLine expansion: {name}")
-    _stack = _stack | {name}
-
+    stack = tuple(_stack or ())
+    if name in stack:
+        raise ValueError(
+            f"Circular reference in BeamLine expansion: {' -> '.join(stack + (name,))}")
+    stack += (name,)
     defn = catalog[name]
-    line = defn.get("line", [])
+    if defn.get("multipass"):
+        _warn(f"BeamLine '{name}' is a multipass line; it is expanded as a plain "
+              f"sequence (multipass element sharing and multipass_phase are not "
+              f"represented)")
     result = []
-
-    for item in line:
+    for item in defn.get("line") or []:
         if isinstance(item, str):
-            # Reference to a named element
-            result.extend(_resolve_reference(item, catalog, _stack))
+            result.extend(_resolve_reference(item, catalog, stack))
         elif isinstance(item, dict):
-            for elem_name, elem_defn in item.items():
-                if elem_defn is None:
-                    # Simple reference (name with null value, unusual but handle it)
-                    result.extend(_resolve_reference(elem_name, catalog, _stack))
-                elif isinstance(elem_defn, dict):
-                    result.extend(
-                        _resolve_inline(elem_name, elem_defn, catalog, _stack)
-                    )
+            for elem_name, spec in item.items():
+                if isinstance(spec, dict):
+                    result.extend(_resolve_inline(elem_name, spec, catalog, stack))
                 else:
-                    result.extend(_resolve_reference(elem_name, catalog, _stack))
-
+                    result.extend(_resolve_reference(elem_name, catalog, stack))
+        else:
+            raise ValueError(f"BeamLine '{name}': malformed line item {item!r}")
     return result
 
 
 def _resolve_reference(name, catalog, stack):
-    """Resolve a plain string reference to an element or sub-beamline."""
+    """Resolve a plain reference to an element or sub-beamline."""
     if name not in catalog:
         raise ValueError(f"Unresolved reference: '{name}'")
-
-    defn = catalog[name]
-    if defn.get("kind") == "BeamLine":
-        return _expand_beamline(name, catalog, stack)
-    else:
-        return [{"name": name, **defn}]
-
-
-def _resolve_inline(name, defn, catalog, stack):
-    """Resolve an inline element definition (possibly with inherit/repeat)."""
-    repeat = defn.get("repeat", 1)
-    inherit_from = defn.get("inherit")
-
-    if repeat == 0:
-        warnings.warn(f"Element '{name}': repeat=0 produces no elements")
-    elif repeat < 0:
-        raise ValueError(
-            f"Element '{name}': negative repeat ({repeat}) is not supported "
-            f"(reversed expansion would require flipping bend angles, edge "
-            f"angles, and element order, which is not implemented)"
-        )
-    if "direction" in defn:
-        raise ValueError(
-            f"Element '{name}': 'direction' modifier is not supported "
-            f"(would require flipping bend signs and edge angles, "
-            f"which is not implemented)"
-        )
-
-    # If the inline dict only has modifiers (repeat, inherit, etc.) and the name
-    # exists in the catalog, treat it as a modified reference to the catalog entry.
-    modifier_keys = {"repeat", "inherit", "direction"}
-    if not inherit_from and set(defn.keys()) <= modifier_keys and name in catalog:
-        cat_entry = catalog[name]
-        if cat_entry.get("kind") == "BeamLine":
-            expanded = _expand_beamline(name, catalog, stack)
-            return [dict(e) for _ in range(abs(repeat)) for e in expanded]
-        else:
-            return [{"name": name, **cat_entry} for _ in range(abs(repeat))]
-
-    if inherit_from:
-        if inherit_from not in catalog:
-            raise ValueError(f"Unresolved inherit reference: '{inherit_from}'")
-        merged = {**catalog[inherit_from], **defn}
-        # Merge nested dicts one level deep (e.g. MagneticMultipoleP, BendP).
-        # Deeper nesting is not merged — no current PALS element uses it.
-        for key in defn:
-            if isinstance(defn[key], dict) and isinstance(catalog[inherit_from].get(key), dict):
-                merged[key] = {**catalog[inherit_from][key], **defn[key]}
-        merged.pop("inherit", None)
-        merged.pop("repeat", None)
-    else:
-        merged = {k: v for k, v in defn.items() if k != "repeat"}
-
-    kind = merged.get("kind")
+    defn = _definition(name, catalog)
+    kind = defn.get("kind")
     if kind == "BeamLine":
-        catalog[name] = merged
-        expanded = _expand_beamline(name, catalog, stack)
-        return [dict(e) for _ in range(abs(repeat)) for e in expanded]
-    elif name in catalog and catalog[name].get("kind") == "BeamLine":
-        # Name references a catalog BeamLine but inline has extra keys
-        extra = set(merged.keys()) - {"kind", "repeat", "inherit", "direction"}
-        if extra:
-            warnings.warn(
-                f"Element '{name}': keys {extra} ignored on BeamLine reference"
-            )
-        expanded = _expand_beamline(name, catalog, stack)
-        return [dict(e) for _ in range(abs(repeat)) for e in expanded]
+        return _expand_beamline(name, catalog, stack)
+    if kind == "Lattice":
+        raise ValueError(f"Lattice '{name}' cannot be used as a line item")
+    return [{**defn, "name": name}]
+
+
+def _resolve_inline(name, spec, catalog, stack):
+    """Resolve a line item with modifiers or an in-place definition."""
+    if "placement" in spec:
+        raise UnsupportedFeatureError(
+            f"Line item '{name}': 'placement' is not supported")
+    direction = spec.get("direction", 1)
+    if direction not in (1, -1) or isinstance(direction, bool):
+        raise ValueError(
+            f"Line item '{name}': direction must be +1 or -1, got {direction!r}")
+    if direction == -1:
+        raise UnsupportedFeatureError(
+            f"Line item '{name}': direction reversal (direction: -1) is not supported; "
+            f"it needs reversed-element tracking and reflection patches. A negative "
+            f"repeat reverses the element order without reversing direction")
+    repeat = spec.get("repeat", 1)
+    if isinstance(repeat, bool) or not isinstance(repeat, int):
+        raise ValueError(f"Line item '{name}': repeat must be an integer, got {repeat!r}")
+    if repeat == 0:
+        warnings.warn(f"Element '{name}': repeat=0 produces no elements",
+                      PALSConversionWarning, stacklevel=2)
+
+    body = {k: v for k, v in spec.items() if k not in ("repeat", "direction")}
+    inherit = body.pop("inherit", None)
+    if inherit is not None:
+        if inherit not in catalog:
+            raise ValueError(f"Unresolved inherit reference: '{inherit}'")
+        merged = _merge(_definition(inherit, catalog), body)
+    elif name in catalog and "kind" not in body:
+        merged = _merge(_definition(name, catalog), body)
     else:
-        return [{"name": name, **merged} for _ in range(abs(repeat))]
+        merged = body
+
+    if merged.get("kind") == "BeamLine":
+        if inherit is None and catalog.get(name, {}).get("kind") == "BeamLine" \
+                and "line" not in body:
+            extra = set(body) - {"kind"}
+            if extra:
+                warnings.warn(
+                    f"Element '{name}': keys {sorted(extra)} ignored on BeamLine reference",
+                    PALSConversionWarning, stacklevel=2)
+            expanded = _expand_beamline(name, catalog, stack)
+        else:
+            expanded = _expand_beamline(name, {**catalog, name: merged}, stack)
+    else:
+        expanded = [{**merged, "name": name}]
+
+    if repeat < 0:
+        expanded = expanded[::-1]
+    return [dict(e) for _ in range(abs(repeat)) for e in expanded]
 
 
 # -----------------------------------------------------------------------
-# Normalization: PALS elements → pals2cosy internal dict format
+# Reference particle
 # -----------------------------------------------------------------------
 
-# Official PALS kinds → internal short names
-# Quadrupole, Kicker, Instrument are handled explicitly in _normalize_kind
-_PALS_KIND_MAP = {
-    "Drift": "DRIFT",
-    "SBend": "DPH",
-    "RBend": "DPH",
-    "Wiggler": "UND",
-    "Solenoid": "SOL",
-    "RFCavity": "RFC",
-    "Sextupole": "SXT",
-    "Octupole": "OCT",
-    "Multipole": "MULT",
-    "Marker": "DRIFT",
-}
+def _reference(flat, facility, ctx, ke_override, particle_override):
+    """Return (species, kinetic energy [MeV]) of the branch reference particle."""
+    refp, source = None, None
+    beginning = next((e for e in flat if e.get("kind") == "BeginningEle"), None)
+    if beginning is not None:
+        refp = ctx.group(beginning, "ReferenceP", beginning["name"])
+        source = beginning["name"]
+    else:
+        for elem in flat:
+            if elem.get("ReferenceP"):
+                refp = ctx.group(elem, "ReferenceP", elem["name"])
+                source = elem["name"]
+                _warn(f"Branch has no BeginningEle; using the ReferenceP of "
+                      f"'{source}' as the reference particle")
+                break
+    refp = refp or {}
+    legacy = _legacy_particle(facility)
 
-
-def _to_float(value, name, field):
-    try:
-        f = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"Element '{name}': field '{field}' must be numeric, got {value!r}"
-        ) from exc
-    if not math.isfinite(f):
-        raise ValueError(
-            f"Element '{name}': field '{field}' must be a finite number, got {f}"
-        )
-    return f
-
-
-def _to_nonneg_float(value, name, field):
-    f = _to_float(value, name, field)
-    if f < 0:
-        raise ValueError(
-            f"Element '{name}': field '{field}' must be non-negative, got {f}"
-        )
-    return f
-
-
-def _to_positive_float(value, name, field):
-    f = _to_float(value, name, field)
-    if f <= 0:
-        raise ValueError(
-            f"Element '{name}': field '{field}' must be positive, got {f}"
-        )
-    return f
-
-
-def _position_and_normalize(flat_elements):
-    """Assign cumulative s_start/s_end and normalize to internal dict format."""
-    result = []
-    s = 0.0
-
-    for raw in flat_elements:
-        name = raw.get("name", "<unnamed>")
-        length = _to_nonneg_float(raw.get("length", 0.0), name, "length")
-        kind = raw.get("kind")
-        if kind is None:
-            warnings.warn(
-                f"Element '{name}' has no 'kind'; defaulting to Drift"
-            )
-            kind = "Drift"
-        internal_type = _normalize_kind(kind, raw)
-
-        elem = {
-            "type": internal_type,
-            "name": raw.get("name", ""),
-            "length": length,
-            "s_start": s,
-            "s_end": s + length,
-            "current": None,
-            "angle": None,
-            "wedge_angle": None,
-            "entrance_edge_angle": None,
-            "exit_edge_angle": None,
-            "pole_gap": None,
-            "dipole_length": None,
-            "enge_coeffs": None,
-            "bn1": None,
-            "bn2": None,
-            "bn3": None,
-            "bn4": None,
-            "bn5": None,
-            "bz": None,
-            "rf_voltage_kv": None,
-            "rf_frequency_hz": None,
-            "rf_phase_deg": None,
-            "wiggler_field": None,
-            "wiggler_period": None,
-        }
-
-        if kind == "Quadrupole":
-            mmp = raw.get("MagneticMultipoleP", {})
-            bn1 = mmp.get("Bn1")
-            if bn1 is not None:
-                elem["bn1"] = _to_float(bn1, name, "MagneticMultipoleP.Bn1")
-
-        elif kind == "Sextupole":
-            mmp = raw.get("MagneticMultipoleP", {})
-            bn2 = mmp.get("Bn2")
-            if bn2 is not None:
-                elem["bn2"] = _to_float(bn2, name, "MagneticMultipoleP.Bn2")
-
-        elif kind == "Octupole":
-            mmp = raw.get("MagneticMultipoleP", {})
-            bn3 = mmp.get("Bn3")
-            if bn3 is not None:
-                elem["bn3"] = _to_float(bn3, name, "MagneticMultipoleP.Bn3")
-
-        elif kind == "Multipole":
-            mmp = raw.get("MagneticMultipoleP", {})
-            for attr, key in [("bn1", "Bn1"), ("bn2", "Bn2"), ("bn3", "Bn3"),
-                              ("bn4", "Bn4"), ("bn5", "Bn5")]:
-                val = mmp.get(key)
-                if val is not None:
-                    elem[attr] = _to_float(val, name, f"MagneticMultipoleP.{key}")
-
-        elif kind == "Wiggler":
-            wig_p = raw.get("WigglerP", {})
-            bw = wig_p.get("peak_field")
-            if bw is not None:
-                elem["wiggler_field"] = _to_float(bw, name, "WigglerP.peak_field")
-            period = wig_p.get("period")
-            if period is not None:
-                elem["wiggler_period"] = _to_positive_float(period, name, "WigglerP.period")
-
-        elif kind == "Solenoid":
-            sol_p = raw.get("SolenoidP", {})
-            bz = sol_p.get("Bz")
-            if bz is not None:
-                elem["bz"] = _to_float(bz, name, "SolenoidP.Bz")
-
-        elif kind == "RFCavity":
-            rf_p = raw.get("RFCavityP", {})
-            v = rf_p.get("voltage_kv")
-            if v is not None:
-                elem["rf_voltage_kv"] = _to_float(v, name, "RFCavityP.voltage_kv")
-            f = rf_p.get("frequency_hz")
-            if f is not None:
-                elem["rf_frequency_hz"] = _to_positive_float(f, name, "RFCavityP.frequency_hz")
-            phi = rf_p.get("phase_deg")
-            if phi is not None:
-                elem["rf_phase_deg"] = _to_float(phi, name, "RFCavityP.phase_deg")
-
-        elif kind in ("SBend", "RBend"):
-            bend_p = raw.get("BendP", {})
-            g_ref = _to_float(bend_p.get("g_ref", 0.0), name, "BendP.g_ref")
-            angle_rad = g_ref * length
-            elem["angle"] = math.degrees(angle_rad)
-            elem["dipole_length"] = length
-
-            e1 = _to_float(bend_p.get("e1", 0.0), name, "BendP.e1")
-            e2 = _to_float(bend_p.get("e2", 0.0), name, "BendP.e2")
-            elem["entrance_edge_angle"] = math.degrees(e1)
-            elem["exit_edge_angle"] = math.degrees(e2)
-
-            # Pole gap from aperture or explicit parameter
-            aperture_p = raw.get("ApertureP", {})
-            y_width = aperture_p.get("y_width", 0.0)
-            elem["pole_gap"] = _to_nonneg_float(y_width, name, "ApertureP.y_width")
-
-        result.append(elem)
-        s += length
-
-    return result
-
-
-def _normalize_kind(kind, raw):
-    """Map PALS kind to internal short name with polarity resolution.
-
-    Note on QPF/QPD labeling: The sign convention here (Bn1 >= 0 → QPF)
-    follows the proton convention. For electrons, the labels are inverted
-    (positive Bn1 is actually defocusing). This is cosmetic only — the
-    converter uses Bn1 directly for MQ commands, bypassing the current/sign
-    path entirely.
-    """
-    if kind == "Quadrupole":
-        mmp = raw.get("MagneticMultipoleP", {})
-        raw_bn1 = mmp.get("Bn1", 0.0)
-        bn1 = _to_float(raw_bn1, raw.get("name", "<unnamed>"),
-                        "MagneticMultipoleP.Bn1")
-        return "QPF" if bn1 >= 0 else "QPD"
-    if kind == "Kicker":
-        plane = raw.get("plane", "vertical")
-        return "STV" if plane == "vertical" else "STH"
-    if kind == "Instrument":
-        return raw.get("instrument_type", "BPM")
-    return _PALS_KIND_MAP.get(kind, kind)
-
-
-def _extract_beam_params(catalog, facility_list, path, ke_override, particle_override):
-    """Extract beam parameters from Lattice definition or CLI overrides."""
-    # Try to find a Lattice with particle info
-    particle_type = particle_override.lower() if particle_override else None
-    ke = ke_override
-    mass_mev = E0_PROTON
-
-    for item in facility_list:
-        if not isinstance(item, dict):
-            continue
-        for name, defn in item.items():
-            if not isinstance(defn, dict):
-                continue
-            if defn.get("kind") == "Lattice":
-                particle = defn.get("particle", {})
-                if isinstance(particle, dict):
-                    species = particle.get("species", particle.get("species_ref"))
-                    if species and not particle_override:
-                        particle_type = species.lower()
-                    energy = particle.get("kinetic_energy")
-                    if energy is not None and ke is None:
-                        # PALS uses eV; convert to MeV
-                        ke = float(energy) / 1e6
-
-    if particle_type is None:
-        particle_type = "proton"
+    if particle_override:
+        species = parse_species(particle_override)
+    elif refp.get("species_ref") is not None:
+        raw = refp["species_ref"]
+        if isinstance(raw, str) and raw in facility.definitions:
+            raw = facility.scope.lookup(raw)
+        species = parse_species(raw)
+    elif legacy.get("species") is not None:
+        species = parse_species(legacy["species"])
+    else:
         warnings.warn(
             "Particle type not specified in lattice file or CLI; defaulting to 'proton'. "
-            "Use --particle to specify explicitly."
-        )
-
-    mass_mev = PARTICLE_MASSES_MEV.get(particle_type)
-    if mass_mev is None:
-        warnings.warn(
-            f"Unknown particle species '{particle_type}'; using proton mass as fallback"
-        )
-        mass_mev = E0_PROTON
-
-    if ke is None:
+            "Use --particle to specify explicitly.",
+            PALSConversionWarning, stacklevel=3)
+        species = parse_species("proton")
+    if species.charge == 0:
         raise ValueError(
-            "Kinetic energy not found in lattice file. "
-            "Use --ke to specify kinetic energy in MeV."
-        )
+            f"Reference species '{species.name}' is neutral; COSY INFINITY needs a "
+            f"charged reference particle")
 
-    return {
-        "kinetic_energy_mev": ke,
-        "particle_type": particle_type,
-        "mass_mev": mass_mev,
-        "rf_frequency_hz": F_RF_DEFAULT,
-        "quad_gradient": None,  # Not needed for Bn1 quads
-        "source_file": os.path.basename(path),
-    }
+    mass_ev = species.mass_mev * 1e6
+    if ke_override is not None:
+        ke = float(ke_override)
+    else:
+        e_tot = ctx.optional(refp, "E_tot_ref", source, "ReferenceP", 0.0)
+        pc = ctx.optional(refp, "pc_ref", source, "ReferenceP", 0.0)
+        if e_tot and pc and not math.isclose(e_tot ** 2, pc ** 2 + mass_ev ** 2,
+                                             rel_tol=1e-9):
+            raise ValueError(
+                f"ReferenceP of '{source}': E_tot_ref = {e_tot} eV and pc_ref = {pc} eV "
+                f"are inconsistent for {species.name}")
+        if e_tot:
+            if e_tot < mass_ev:
+                raise ValueError(
+                    f"ReferenceP of '{source}': E_tot_ref = {e_tot} eV is below the "
+                    f"{species.name} rest energy {mass_ev} eV")
+            ke = (e_tot - mass_ev) / 1e6
+        elif pc:
+            ke = (math.sqrt(pc ** 2 + mass_ev ** 2) - mass_ev) / 1e6
+        elif legacy.get("kinetic_energy") is not None:
+            ke = ctx.number(legacy["kinetic_energy"], "Lattice", "particle.kinetic_energy") / 1e6
+        else:
+            raise ValueError(
+                "Kinetic energy not found in lattice file. Set ReferenceP.E_tot_ref or "
+                "pc_ref on the BeginningEle, or use --ke to specify kinetic energy in MeV.")
+    if not ke > 0:
+        raise ValueError(f"Reference kinetic energy must be positive, got {ke} MeV")
+    return species, ke
+
+
+def _legacy_particle(facility):
+    """Pre-0.6 ``Lattice.particle`` block (species, kinetic_energy in eV)."""
+    for name in facility.order:
+        defn = facility.catalog[name]
+        if defn.get("kind") == "Lattice" and isinstance(defn.get("particle"), dict):
+            warnings.warn(
+                f"Lattice '{name}': 'particle' is deprecated; set the reference "
+                f"particle with ReferenceP (species_ref, E_tot_ref or pc_ref) on the "
+                f"branch's BeginningEle",
+                PALSDeprecationWarning, stacklevel=4)
+            particle = defn["particle"]
+            return {
+                "species": particle.get("species", particle.get("species_ref")),
+                "kinetic_energy": particle.get("kinetic_energy"),
+            }
+    return {}
+
+
+# -----------------------------------------------------------------------
+# Element translation and positions
+# -----------------------------------------------------------------------
+
+def _position_and_normalize(flat, ctx):
+    """Translate elements, assign s positions, resolve RF harmonic numbers.
+
+    Returns the element list and the reference transit time of the branch.
+    """
+    elements = []
+    s = 0.0
+    transit_time = 0.0
+    for raw in flat:
+        e_up, pc_up = ctx.e_tot_ev, ctx.pc_ev
+        elem = normalize_element(ctx, raw)
+        if raw.get("kind") in _BOOKKEEPING_KINDS:
+            continue
+        length = elem["length"]
+        elem["s_start"] = s
+        elem["s_end"] = s + length
+        s += length
+        if length:
+            transit_time += length * (e_up + ctx.e_tot_ev) / (C_LIGHT * (pc_up + ctx.pc_ev))
+        elements.append(elem)
+
+    for elem in elements:
+        harmonic = elem.get("rf_harmonic")
+        if harmonic is not None:
+            if transit_time <= 0:
+                raise ValueError(
+                    f"RFCavity '{elem['name']}': harmonic_number needs a branch of "
+                    f"nonzero length to define the revolution frequency")
+            elem["rf_frequency_hz"] = harmonic / transit_time
+    return elements, transit_time

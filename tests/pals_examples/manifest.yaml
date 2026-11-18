@@ -1,0 +1,231 @@
+# Expected pals2cosy outcome for every example of the PALS specification.
+#
+# The files in this directory are the `examples/` tree of
+# https://github.com/pals-project/pals at the commit in SPEC_COMMIT, copied
+# verbatim (CC BY 4.0, see LICENSE). To move to a newer specification, copy
+# the new `examples/` tree here, update SPEC_COMMIT and
+# pals2cosy._version.__pals_commit__, and give every new file an entry.
+#
+# Each entry is one of
+#   converts:  converted without error (and, when COSY INFINITY is
+#              installed, the COSYScript runs without COSY errors)
+#   error:     conversion fails with `error` (exception class) whose message
+#              matches the regex `match`, for the stated `reason`
+#   fragment:  not a PALS document (a `.subpals.yaml` include target)
+# Optional keys: `options` (parse_lattice keyword arguments, as given on the
+# command line), `warns` (regexes that must appear among the warnings).
+
+examples:
+  alsinj.pals.yaml:
+    expect: converts
+  fodo.pals.yaml:
+    expect: converts
+    reason: the file sets no reference particle; it is given as with --ke/--particle
+    options: {ke_override: 1000, particle_override: proton}
+  iota.pals.yaml:
+    expect: converts
+    warns: ["edge1_int is not represented"]
+
+  machine/machine.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'include' is not supported"
+    reason: include files are not supported (the file also uses direction reversal)
+  machine/subline_elements.subpals.yaml:
+    expect: fragment
+
+  modular_machine/joiner.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'load' is not supported"
+    reason: load is not supported
+  modular_machine/layout.pals.yaml:
+    expect: converts
+    reason: load-family member; its quadrupole settings live in settings.pals.yaml
+    warns: ["Quadrupole 'Q1a' has no readable strength"]
+  modular_machine/settings.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'set' commands are not supported"
+    reason: set commands are not supported
+
+  unit_tests/adjustments/tune_match.pals.yaml:
+    expect: converts
+    warns: ["'adjustments' are not applied"]
+
+  unit_tests/beamlines/branch_by_name.pals.yaml:
+    expect: converts
+  unit_tests/beamlines/branch_inherit.pals.yaml:
+    expect: converts
+  unit_tests/beamlines/repeat_nested.pals.yaml:
+    expect: converts
+
+  unit_tests/controllers/absolute.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "ABSOLUTE Controller"
+    reason: ABSOLUTE controllers set parameters during expansion; not supported
+  unit_tests/controllers/absolute_sum.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "ABSOLUTE Controller"
+    reason: ABSOLUTE controllers are not supported
+  unit_tests/controllers/chained.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "ABSOLUTE Controller"
+    reason: ABSOLUTE controllers are not supported
+  unit_tests/controllers/reach_into_branch.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "ABSOLUTE Controller"
+    reason: ABSOLUTE controllers are not supported
+  unit_tests/controllers/relative.pals.yaml:
+    expect: converts
+    warns: ["RELATIVE Controller 'chrom_a' ignored"]
+
+  unit_tests/document/extensions.pals.yaml:
+    expect: converts
+  unit_tests/document/root_keys.pals.yaml:
+    expect: converts
+
+  unit_tests/elements/bend_actual_field_default.pals.yaml:
+    expect: converts
+  unit_tests/elements/bend_angle_radius.pals.yaml:
+    expect: converts
+  unit_tests/elements/bend_chord.pals.yaml:
+    expect: converts
+  unit_tests/elements/bend_straight.pals.yaml:
+    expect: converts
+  unit_tests/elements/drift_quad_bend.pals.yaml:
+    expect: converts
+  unit_tests/elements/electric_multipole.pals.yaml:
+    expect: converts
+    warns: ["ElectricMultipoleP fields are not converted"]
+  unit_tests/elements/rf_active_length.pals.yaml:
+    expect: error
+    error: ValueError
+    match: "RFP needs frequency or harmonic_number"
+    reason: an RF cavity with voltage but no frequency cannot be modelled
+  unit_tests/elements/rf_gradient.pals.yaml:
+    expect: error
+    error: ValueError
+    match: "RFP needs frequency or harmonic_number"
+    reason: an RF cavity with voltage but no frequency cannot be modelled
+  unit_tests/elements/rf_voltage.pals.yaml:
+    expect: error
+    error: ValueError
+    match: "RFP needs frequency or harmonic_number"
+    reason: an RF cavity with voltage but no frequency cannot be modelled
+  unit_tests/elements/rf_voltage_and_gradient.pals.yaml:
+    expect: error
+    error: ValueError
+    match: "RFP needs frequency or harmonic_number"
+    reason: an RF cavity with voltage but no frequency cannot be modelled
+  unit_tests/elements/twiss_momentum_dependence.pals.yaml:
+    expect: converts
+
+  unit_tests/expressions/constants_variables.pals.yaml:
+    expect: converts
+  unit_tests/expressions/element_parameter_reference.pals.yaml:
+    expect: converts
+    warns: ["no BeginningEle; using the ReferenceP of 'DH1A'"]
+  unit_tests/expressions/inline_expressions.pals.yaml:
+    expect: error
+    error: ValueError
+    match: "'length' must be non-negative"
+    reason: the solenoid length 0.1*log(abs(-0.34)) evaluates to a negative length
+  unit_tests/expressions/species_constant.pals.yaml:
+    expect: error
+    error: ValueError
+    match: "'#3He' is neutral"
+    reason: the reference species is a neutral atom, which has no magnetic rigidity
+
+  unit_tests/forks/fork_destinations.pals.yaml:
+    expect: converts
+    warns: ["Fork 'f1' to 'dump_line' is not followed"]
+  unit_tests/forks/fork_existing_branch.pals.yaml:
+    expect: converts
+    warns: ["has 2 branches"]
+  unit_tests/forks/fork_minimal.pals.yaml:
+    expect: converts
+    warns: ["is not followed"]
+  unit_tests/forks/fork_new_branch.pals.yaml:
+    expect: converts
+    warns: ["is not followed"]
+  unit_tests/forks/fork_to_dump_line.pals.yaml:
+    expect: converts
+    warns: ["is not followed"]
+  unit_tests/forks/fork_web.pals.yaml:
+    expect: converts
+    warns: ["has 2 branches", "is not followed"]
+
+  # Families combined with `load`: the joiners need load; members that hold
+  # only notes have no BeamLine to convert.
+  unit_tests/loading/basic/joiner.pals.yaml: &load
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'load' is not supported"
+    reason: load is not supported
+  unit_tests/loading/basic/layout.pals.yaml:
+    expect: converts
+    reason: load-family member with a complete lattice
+  unit_tests/loading/basic/settings.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'set' commands are not supported"
+    reason: set commands are not supported
+  unit_tests/loading/diamond/joiner.pals.yaml: *load
+  unit_tests/loading/diamond/left.pals.yaml: *load
+  unit_tests/loading/diamond/right.pals.yaml: *load
+  unit_tests/loading/diamond/shared.pals.yaml: &member
+    expect: error
+    error: ValueError
+    match: "No BeamLine found"
+    reason: load-family member without a lattice
+  unit_tests/loading/extension_labels/a.pals.yaml: *member
+  unit_tests/loading/extension_labels/joiner.pals.yaml: *load
+  unit_tests/loading/implicit_self/a.pals.yaml: *member
+  unit_tests/loading/implicit_self/joiner.pals.yaml: *load
+  unit_tests/loading/include/joiner.pals.yaml: *load
+  unit_tests/loading/include/parts/extra.subpals.yaml:
+    expect: fragment
+  unit_tests/loading/include/sub/layout.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'include' is not supported"
+    reason: include files are not supported
+  unit_tests/loading/nested/a.pals.yaml: *member
+  unit_tests/loading/nested/inner.pals.yaml: *load
+  unit_tests/loading/nested/joiner.pals.yaml: *load
+  unit_tests/loading/relative_paths/joiner.pals.yaml: *load
+  unit_tests/loading/relative_paths/sub/inner.pals.yaml: *load
+  unit_tests/loading/relative_paths/top.pals.yaml: *member
+  unit_tests/loading/self_position/a.pals.yaml: *member
+  unit_tests/loading/self_position/b.pals.yaml: *member
+  unit_tests/loading/self_position/joiner.pals.yaml: *load
+  unit_tests/loading/version_match/a.pals.yaml: *member
+  unit_tests/loading/version_match/joiner.pals.yaml: *load
+
+  unit_tests/multipass/multipass.pals.yaml:
+    expect: converts
+    warns: ["'linac' is a multipass line"]
+  unit_tests/multipass/multipass_nested.pals.yaml:
+    expect: converts
+    warns: ["'outer' is a multipass line", "'inner' is a multipass line"]
+
+  unit_tests/sets/set_pattern.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'set' commands are not supported"
+    reason: set commands are not supported
+  unit_tests/sets/set_single_definition.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'set' commands are not supported"
+    reason: set commands are not supported
+  unit_tests/sets/sets_compact.pals.yaml:
+    expect: error
+    error: UnsupportedFeatureError
+    match: "'sets' commands are not supported"
+    reason: set commands are not supported

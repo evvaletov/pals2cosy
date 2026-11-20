@@ -1,0 +1,4 @@
+include CHANGELOG.md
+recursive-include docs *.md *.py Makefile
+recursive-include examples *.md *.yaml
+recursive-include tests *.py *.yaml *.md LICENSE SPEC_COMMIT

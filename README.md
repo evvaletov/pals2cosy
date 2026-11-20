@@ -377,6 +377,11 @@ Eremey Valetov
 - Department of Physics and Astronomy, Michigan State University, East Lansing, MI, USA
 - Department of Physics and Astronomy, University of Hawaiʻi at Mānoa, Honolulu, HI, USA
 
+## License
+
+MIT; see `LICENSE`. The PALS examples in `tests/pals_examples/` are under
+CC BY 4.0 (`tests/pals_examples/LICENSE`).
+
 ## Acknowledgments
 
 This work was supported in part by DOE EPSCoR Award DE-SC0025583. The converter

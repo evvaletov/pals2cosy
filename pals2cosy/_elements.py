@@ -33,6 +33,7 @@ def blank_element(etype, name="", length=0.0, s_start=None, s_end=None):
         "exit_edge_curvature": None,
         "tilt": 0.0,
         "pole_gap": None,
+        "edge_int": None,
         "dipole_length": None,
         "enge_coeffs": None,
         "bn": {},

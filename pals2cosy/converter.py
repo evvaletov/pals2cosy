@@ -31,6 +31,12 @@ THIN_SLICE = 1e-6
 # ratio the difference is not reported.
 SOLENOID_FRINGE_TOLERANCE = 1e-3
 
+# Integral of F (1 - F) over S for COSY's default dipole Enge function F
+# (procedure FD), where S is the distance from the effective field boundary
+# in units of the full gap 2d. A bend of half-gap d therefore has the PALS
+# fringe-field integral edge_int = d * DIPOLE_ENGE_INTEGRAL.
+DIPOLE_ENGE_INTEGRAL = 0.3694585
+
 _MM_NORMAL = "PALSBN"
 _MM_SKEW = "PALSBS"
 _RF_VOLTAGE = "PALSRFV"
@@ -187,6 +193,7 @@ def _consolidate_dipoles(elements):
                 "exit_curvature": _float_or(elem.get("exit_edge_curvature"), 0.0),
                 "tilt": _float_or(elem.get("tilt"), 0.0),
                 "pole_gap": _float_or(elem.get("pole_gap"), 0.0),
+                "edge_int": elem.get("edge_int"),
                 "entrance_enge": elem.get("enge_coeffs"),
                 "exit_enge": elem.get("enge_coeffs"),  # symmetric: same Enge for both faces
             })
@@ -284,13 +291,34 @@ class _LatticeWriter:
         return self._drift(elem)
 
     def _half_gap(self, elem):
+        """Half-gap of a bend, which sets the extent of COSY's fringe field.
+
+        With fringe fields on, PALS fringe-field integrals take precedence:
+        the half-gap is chosen so that COSY's default Enge field has them.
+        """
+        name = elem.get("name", "")
+        edge_int = elem.get("edge_int") or (0.0, 0.0)
+        if any(edge_int) and self.fr == 0:
+            for face, value in enumerate(edge_int, 1):
+                if value:
+                    warnings.warn(
+                        f"Bend '{name}': BendP.edge{face}_int is not represented at "
+                        f"--fr 0, where COSY's bends have hard edges; --fr 1, 2 or 3 "
+                        f"includes it", PALSConversionWarning)
+        elif any(edge_int):
+            if edge_int[0] != edge_int[1]:
+                warnings.warn(
+                    f"Bend '{name}': COSY's DIL has one fringe-field extent for both "
+                    f"faces; it is set from the mean of edge1_int = {edge_int[0]} m and "
+                    f"edge2_int = {edge_int[1]} m", PALSConversionWarning)
+            return (edge_int[0] + edge_int[1]) / 2 / DIPOLE_ENGE_INTEGRAL
+
         half_gap = (elem.get("pole_gap") or 0.0) / 2
         if half_gap == 0 and self.fr > 0:
             warnings.warn(
-                f"Bend '{elem.get('name', '')}' gives no pole gap (ApertureP.y_width); "
-                f"its fringe field uses the bore radius {self.r} m as the half-gap",
-                PALSConversionWarning,
-            )
+                f"Bend '{name}' gives no pole gap (ApertureP.y_width) and no "
+                f"edge1_int/edge2_int; its fringe field uses the bore radius {self.r} m "
+                f"as the half-gap", PALSConversionWarning)
             half_gap = self.r
         return half_gap
 
@@ -467,8 +495,8 @@ def _format_enge(coeffs):
 # COSYScript template
 # ---------------------------------------------------------------------------
 
-def _particle_command(particle, ke):
-    """Return the COSYScript command string to set the reference particle."""
+def _particle_commands(particle, ke):
+    """COSYScript commands that set the reference particle."""
     try:
         species = parse_species(particle)
     except ValueError as exc:
@@ -477,13 +505,18 @@ def _particle_command(particle, ke):
         raise ValueError(
             f"Particle type '{particle}' is neutral; COSY INFINITY needs a charged "
             f"reference particle")
-    return species.cosy_command(ke)
+    commands = [species.cosy_command(ke)]
+    if species.anomalous_moment:
+        # RP leaves COSY's spin G0 alone; RPS with spin tracking off sets it, as
+        # the presets RPP, RPE and RPMU do.
+        commands.append(f"RPS 0 {species.anomalous_moment}")
+    return commands
 
 
 def _fox_template(source_file, dimensions, order, ke, fr, lattice_body,
                   particle="electron", twiss=False, declarations=()):
     dim = dimensions
-    rp_line = _particle_command(particle, ke)
+    reference = "".join(f"    {cmd} ;\n" for cmd in _particle_commands(particle, ke))
     safe_source = re.sub(r'[^\x20-\x7e]|[{}]', '', source_file)
     decl = "".join(f"        {line}\n" for line in declarations)
     # No explicit FD needed — OV calls FD internally, loading default
@@ -526,7 +559,7 @@ PROCEDURE RUN ;
     ENDPROCEDURE ;
 
     OV {order} {dim} 0 ;
-    {rp_line} ;
+{reference}\
     FR {fr} ;
     LATTICE ;
 {twiss_block}

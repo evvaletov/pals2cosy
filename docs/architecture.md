@@ -109,7 +109,7 @@ element and `s_start_m` of the next.
    appropriate COSYScript commands for each element type. Elements that need
    COSY arrays (`MMS`, `RF`) make the writer declare them at the top of the
    `LATTICE` procedure. The complete program is assembled from a template
-   that includes the lattice procedure, setup commands (`OV`, `RP`, `FR`),
+   that includes the lattice procedure, setup commands (`OV`, `RP`, `RPS`, `FR`),
    and optionally Twiss output (`--twiss`).
 
 ## Design decisions
@@ -142,7 +142,19 @@ omitted. FR 0 has no fringe fields.
 mass in COSY's own atomic mass unit, so COSY's rest energy, and with it the
 reference rigidity, equals the one the parser converted normalized strengths
 with. COSY's preset procedures (`RPE`, `RPP`, `RPMU`, `RPPI`) are not used:
-their built-in masses differ from CODATA 2018 by 1e-7 to 1.5e-6.
+their built-in masses differ from CODATA 2018 by 1e-7 to 1.5e-6. The spin
+anomaly `G0` that the presets set is set with `RPS 0 G` when the species has
+a tabulated `G`; an assignment `G0 := G` would not do, because the `--twiss`
+output declares a local `G0` for the Twiss gamma.
+
+**Bend fringe-field extent.** COSY scales its default Enge function to the
+half-gap `d` of `DIL`. The PALS fringe-field integral of that function is
+`edge_int = 0.3695 d`, so with fringe fields on `d` is set from
+`edge1_int`/`edge2_int` when the lattice gives them. This reproduces the
+first-order vertical edge correction `ψ` of the hard-edge model of MAD and
+Bmad: for 0.1 rad faces and `g·edge_int` = 0.005, to 0.2% of the correction
+at `FR 3` and 2% at `FR 1`, which uses COSY's precomputed `SYSCA.DAT` maps.
+The agreement degrades as the face angle and `g·edge_int` grow.
 
 **BeamLine lengths.** A BeamLine that declares `length` is bracketed by
 marks during expansion; once the element lengths are resolved (a Bend's arc

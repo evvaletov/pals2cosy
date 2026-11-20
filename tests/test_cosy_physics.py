@@ -12,7 +12,7 @@ import pytest
 from pals2cosy.constants import C_LIGHT
 from pals2cosy.converter import convert
 from pals2cosy.pals_parser import parse_lattice
-from tests.cosy_harness import requires_cosy, run_cosy
+from tests.cosy_harness import requires_cosy, requires_sysca, run_cosy
 
 pytestmark = requires_cosy
 
@@ -185,6 +185,48 @@ def test_vertical_bend_from_tilt(pals_file, cosy_dir, tilt):
     assert m.coeff(0, 1) == pytest.approx(1.0, abs=1e-12)
     assert m.coeff(2, 0, 0, 0, 0, 0, 1) == pytest.approx(
         math.copysign(dispersion, tilt) * _dp_over_p_per_delta(), rel=1e-6)
+
+
+def test_spin_anomaly_reaches_cosy(pals_file, cosy_dir):
+    # With --twiss the program declares a local G0 for the Twiss gamma, so the
+    # anomalous moment must reach COSY's global G0 through RPS.
+    _, _, script = _script(pals_file, """\
+- qf: {kind: Quadrupole, length: 0.2, MagneticMultipoleP: {Kn1: 1.0}}
+- d1: {kind: Drift, length: 1.0}
+- qd: {kind: Quadrupole, length: 0.2, MagneticMultipoleP: {Kn1: -1.0}}
+- d2: {kind: Drift, length: 1.0}""", twiss=True)
+    script = script.replace("\nRUN ;\n", "\nRUN ;\nWRITE 6 '### G0' ; WRITE 6 G0 ;\n")
+    result = run_cosy(script, cosy_dir)
+    assert not result.errors, result.errors
+    lines = [line.strip() for line in result.stdout.splitlines()]
+    g0 = float(lines[lines.index("### G0") + 1].replace("D", "E"))
+    assert g0 == pytest.approx(1.79284734463, rel=1e-12)
+
+
+def _hard_edge_vertical(g, length, e, edge_int):
+    """(y|y) and (b|y) of a sector bend between hard edges with the MAD/Bmad
+    fringe-field correction psi = 2 g edge_int (1 + sin^2 e) / cos e."""
+    psi = 2 * g * edge_int * (1 + math.sin(e) ** 2) / math.cos(e)
+    kick = -g * math.tan(e - psi)
+    return 1 + length * kick, 2 * kick + length * kick ** 2
+
+
+@pytest.mark.parametrize("fr, tolerance", [pytest.param(1, 0.03, marks=requires_sysca),
+                                           (3, 0.01)])
+def test_bend_fringe_integral(pals_file, cosy_dir, fr, tolerance):
+    # With the half-gap derived from edge_int, COSY's soft-edge bend gives the
+    # first-order vertical fringe-field correction of the hard-edge model.
+    g, length, e, edge_int = 0.5, 1.0, 0.1, 0.01
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _, m = _map(pals_file, cosy_dir,
+                    f"- b: {{kind: Bend, length: {length}, BendP: {{g_ref: {g}, e1: {e}, "
+                    f"e2: {e}, edge1_int: {edge_int}, edge2_int: {edge_int}}}}}",
+                    order=1, fringe_field_order=fr)
+    expected = _hard_edge_vertical(g, length, e, edge_int)
+    without = _hard_edge_vertical(g, length, e, 0.0)
+    for row, value, hard in zip((2, 3), expected, without):
+        assert m.coeff(row, 0, 0, 1) == pytest.approx(value, abs=tolerance * abs(value - hard))
 
 
 def _dp_over_p_per_delta():

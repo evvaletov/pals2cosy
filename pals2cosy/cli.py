@@ -80,7 +80,8 @@ def main(argv=None):
     parser.add_argument("--quad-aperture", type=float, default=0.027,
                         help="Multipole bore diameter in meters; pole-tip fields are "
                              "given at its radius, which is also the half-gap of bends "
-                             "without ApertureP under --fr 1-3 (default: 0.027)")
+                             "without edge1_int/edge2_int or ApertureP under --fr 1-3 "
+                             "(default: 0.027)")
     parser.add_argument("--solenoid-fringe", type=float, default=None,
                         help="Fringe-field length in meters of COSY's soft-edge "
                              "solenoid; shorter approaches the hard-edge PALS solenoid "
@@ -132,7 +133,8 @@ def main(argv=None):
             warnings.simplefilter("error", PALSConversionWarning)
         try:
             fox = _convert_file(args)
-        except (ValueError, ArithmeticError, OSError, PALSConversionWarning) as exc:
+        except (ValueError, ArithmeticError, OSError, RecursionError,
+                PALSConversionWarning) as exc:
             print(f"pals2cosy: error: {exc}", file=sys.stderr)
             return 1
 

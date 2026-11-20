@@ -3,6 +3,7 @@
 Tests for pals2cosy COSYScript converter.
 """
 
+import math
 import os
 import re
 import warnings
@@ -13,7 +14,9 @@ from pals2cosy.constants import (
     AMU_MEV_COSY, E0_ELECTRON, E0_MUON, E0_PION_CHARGED, E0_PROTON,
 )
 from pals2cosy.parser import parse_lattice
-from pals2cosy.converter import convert, _consolidate_dipoles, _format_enge
+from pals2cosy.converter import (
+    DIPOLE_ENGE_INTEGRAL, convert, _consolidate_dipoles, _format_enge,
+)
 from pals2cosy.diagnostics import PALSConversionWarning
 
 R = 0.0135  # default bore radius (quad_aperture / 2)
@@ -567,6 +570,19 @@ def test_generic_particle():
     assert _rp_mass_charge(fox3, 500) == (pytest.approx(12 - 6 * 5.48579909e-4, rel=1e-7), 6)
 
 
+@pytest.mark.parametrize("particle, g", [
+    ("proton", 1.79284734463), ("electron", 1.15965218128e-3),
+    ("deuteron", -0.1429873), ("pion+", None), ("#12C+6", None),
+])
+def test_spin_anomaly_set_with_rps(particle, g):
+    # RP leaves COSY's G0 alone; RPS with spin tracking off sets it, as the
+    # presets RPP, RPE and RPMU do.
+    bp = {"kinetic_energy_mev": 500, "particle_type": particle, "source_file": "t"}
+    fox = convert(bp, [blank_element("DRIFT", "d", 1.0)])
+    rps = [l.strip() for l in fox.splitlines() if l.strip().startswith("RPS")]
+    assert rps == ([f"RPS 0 {g} ;"] if g else [])
+
+
 def _rp_mass_charge(fox, ke):
     line = next(l.strip() for l in fox.splitlines() if l.strip().startswith(f"RP {ke} "))
     _, _, mass, charge, _ = line.split()
@@ -940,6 +956,51 @@ def test_bend_without_gap_at_fr0_is_silent():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert _dil_gap(convert(_BP, _bend_only(None))) == 0.0
+
+
+def _bend_with_edge_int(edge1, edge2, pole_gap=None):
+    elements = _bend_only(pole_gap)
+    elements[0]["edge_int"] = (edge1, edge2)
+    return elements
+
+
+def test_dipole_enge_integral():
+    # Integral of F (1 - F) for COSY's default dipole Enge coefficients (FD),
+    # with F = 1 below S = -3 and 0 above S = 5, as in COSY's ENGE function.
+    coeffs = (0.478959, 1.911289, -1.185953, 1.630554, -1.082657, 0.318111)
+
+    def enge(s):
+        p = sum(c * s ** i for i, c in enumerate(coeffs))
+        return 1 / (1 + math.exp(min(max(p, -60.0), 30.0)))
+
+    n, a, b = 8000, -3.0, 5.0
+    h = (b - a) / n
+    g = [enge(a + i * h) * (1 - enge(a + i * h)) for i in range(n + 1)]
+    simpson = h / 3 * (g[0] + g[-1] + 4 * sum(g[1:-1:2]) + 2 * sum(g[2:-1:2]))
+    assert simpson == pytest.approx(DIPOLE_ENGE_INTEGRAL, rel=1e-6)
+
+
+@pytest.mark.parametrize("fr", [1, 2, 3])
+def test_edge_int_sets_fringe_extent(fr):
+    # The fringe-field integral fixes the half-gap of COSY's default Enge
+    # field and takes precedence over the aperture.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        fox = convert(_BP, _bend_with_edge_int(0.0145, 0.0145, pole_gap=0.058),
+                      fringe_field_order=fr)
+    assert _dil_gap(fox) == pytest.approx(0.0145 / DIPOLE_ENGE_INTEGRAL)
+
+
+def test_unequal_edge_ints_use_their_mean():
+    with pytest.warns(PALSConversionWarning, match="mean of edge1_int"):
+        fox = convert(_BP, _bend_with_edge_int(0.01, 0.02), fringe_field_order=3)
+    assert _dil_gap(fox) == pytest.approx(0.015 / DIPOLE_ENGE_INTEGRAL)
+
+
+def test_edge_int_at_fr0_warns():
+    with pytest.warns(PALSConversionWarning, match="edge2_int is not represented at --fr 0"):
+        fox = convert(_BP, _bend_with_edge_int(0.0, 0.01))
+    assert _dil_gap(fox) == 0.0
 
 
 def _solenoid_only(length=0.5):

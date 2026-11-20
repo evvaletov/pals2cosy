@@ -1,9 +1,10 @@
 # Changelog
 
-## [0.6.0] — 2026-11-18
+## [0.6.0] — 2026-11-19
 
 Targets the PALS specification at commit `b9d5b355` (13 November 2026),
-recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
+recorded as `pals2cosy.__pals_commit__` and printed by `--version`. 0.5.0 was
+not published on PyPI, so PyPI users upgrade from 0.4.2.
 
 ### Fixed
 - **Multipole field scaling.** PALS `BnN` are field derivatives in T/m^N
@@ -26,20 +27,17 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
   length longer than the element).
 - Bends without `ApertureP` gave COSY a half-gap of 0: `--fr 3` stopped with
   a division by zero, and `--fr 1`/`2` silently produced a hard edge. With
-  fringe fields on, the bore radius (`--quad-aperture / 2`) is now used, with
-  a warning.
-- The reference particle is always set with `RP` and the PALS (CODATA 2018)
-  mass. The masses of COSY's presets `RPP`, `RPE`, `RPMU` and `RPPI` differ
-  from it by 1e-7 (proton, electron) to 1.5e-6 (pion), so COSY's reference
-  rigidity disagreed with the one normalized strengths were converted with
-  (by 2.7e-6 in the IOTA one-turn map).
+  fringe fields on, the half-gap now follows from `edge1_int`/`edge2_int`
+  (see Added) or, failing those, is the bore radius (`--quad-aperture / 2`),
+  with a warning.
+- The reference particle is always set with `RP E M Z` and the PALS (CODATA
+  2018) mass, followed by `RPS 0 G` where the anomalous moment `G` is
+  tabulated. The masses of COSY's presets `RPP`, `RPE`, `RPMU` and `RPPI`
+  differ from it by 1e-7 (proton, electron) to 1.5e-6 (pion), so COSY's
+  reference rigidity disagreed with the one normalized strengths were
+  converted with (by 2.7e-6 in the IOTA one-turn map).
 - `--twiss` uses a 2D map unless `--dim 3` is given, which needs RF; COSY's
   `GT` cannot handle the longitudinal plane of a 3D map without RF.
-- RF `dE_ref` with zero or absent voltage now changes the PALS reference
-  energy (it was ignored without a voltage) and warns that COSY's reference
-  does not follow, as for a cavity whose crest gain differs from `dE_ref`.
-- Failed powers in expressions (a negative base with a fractional exponent,
-  overflow, `0^-1`) are conversion errors instead of tracebacks.
 - Warnings about standalone flat-format wedges (`DPW`), truncated Enge
   coefficients and an ignored `--beamline` are `PALSConversionWarning`s, so
   `--strict` catches them.
@@ -49,6 +47,11 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
   `radius_ref`} × {`length`, `L_chord`, `L_rectangle`} × {`angle_ref`}),
   `e1`/`e2` and `e1_rect`/`e2_rect` per `ref_geometry`, face curvatures
   `h1`/`h2`, and `tilt_ref` as `RA` rotations.
+- Bend fringe-field integrals `edge1_int`/`edge2_int`: with `--fr` 1–3 they
+  set the half-gap of `DIL` to `edge_int / 0.3695`, which gives COSY's
+  default Enge field the PALS integral, in preference to `ApertureP`. In the
+  IOTA example the bends then give the design vertical tune to 0.003. At
+  `--fr 0`, where COSY's bends have hard edges, they warn.
 - Normalized (`KnN`, `KsN`), integrated (`BnNL`, `KnNL`) and tapered
   multipole strengths, skew components and `tiltN` (via COSY `MMS`), orders up
   to 10, and zero-length (thin) multipoles.
@@ -58,14 +61,20 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
 - PALS/OpenPMD species parser (`pals2cosy.parse_species`): leptons, hadrons,
   pions, light nuclei, and ions such as `#3He+2` or `Au+79`.
 - `RFP` (voltage or gradient·`L_active`, frequency or `harmonic_number`,
-  phase with the `zero_phase` conventions, `dE_ref`) and `SolenoidP`
-  (`Bsol`, `Ksol`).
+  phase with the `zero_phase` conventions, `dE_ref`, also without a
+  voltage) and `SolenoidP` (`Bsol`, `Ksol`). A `dE_ref` that differs from
+  the gain COSY gives the reference particle warns, since COSY's reference
+  follows its own gain.
 - Safe evaluation of PALS expressions in numeric fields: constants and
   variables, arithmetic, PALS constants and functions, element parameter
-  references.
+  references. Expressions that cannot be evaluated (a negative base with a
+  fractional exponent, overflow, `factorial` beyond 170, nesting too deep for
+  the parser) are one-line conversion errors.
 - Negative `repeat` (reversed element order, per the specification without
   direction reversal); in-place Lattice branches; facility-level and
-  parameter-group `inherit`; `use` of the last Lattice by default.
+  parameter-group `inherit`, where a parameter may be modified in another
+  form (`Bn1` for an inherited `Kn1`, `Bsol` for `Ksol`); `use` of the last
+  Lattice by default.
 - BeamLine `length`, also as a line-item override: a field-free drift fills
   the BeamLine up to its declared length (at the front when a negative repeat
   reverses it); a length shorter than the items raises
@@ -96,9 +105,9 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
   reports conversion errors as one line with exit status 1.
 - Conformance suite: the PALS `examples/` tree at the pinned commit in
   `tests/pals_examples/` with a manifest of expected outcomes, run in COSY
-  INFINITY at `FR 0`, `1` and `3`, plus tests that compare COSY transfer maps
-  with the PALS element definitions. The COSY harness checks COSY's exit
-  status and Fortran runtime errors and supplies `SYSCA.DAT`
+  INFINITY at `FR 0` to `3`, plus tests that compare COSY transfer maps with
+  the PALS element definitions. The COSY harness checks COSY's exit status,
+  compilation failures and Fortran runtime errors and supplies `SYSCA.DAT`
   (`PALS2COSY_COSY_SYSCA`) for `FR 1` and `2`.
 
 ### Changed (breaking)
@@ -107,7 +116,14 @@ recorded as `pals2cosy.__pals_commit__` and printed by `--version`.
 - An unknown reference species is an error instead of a proton-mass fallback.
 - A `FloorShift` must have zero length, like a `Marker`.
 - `convert()` takes `dimensions=None` (3, or 2 with `twiss`) and
-  `solenoid_fringe`; `Species` no longer has a `cosy_preset` field.
+  `solenoid_fringe`.
+- Generated programs set the reference particle with `RP E M Z` and
+  `RPS 0 G` instead of COSY's presets `RPP`, `RPE`, `RPMU` and `RPPI` (see
+  Fixed).
+- Every PALS solenoid warns at `--fr 0` unless `--solenoid-fringe` is at most
+  1/1000 of its length, because COSY's `CMS` is soft-edged and focuses less
+  than the hard-edge PALS solenoid; `--strict` therefore rejects solenoids
+  by default.
 - Without a `use` statement the last Lattice is converted (previously the
   last BeamLine), as the specification prescribes.
 - `BeginningEle` and `Placeholder` no longer appear in the element list.

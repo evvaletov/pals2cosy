@@ -33,6 +33,7 @@ from .diagnostics import (
 from .expressions import ExpressionError, Scope
 from .pals_elements import (
     ElementContext, ExtensionLabels, is_extension_block, normalize_element,
+    override_group,
 )
 from .species import parse_species
 
@@ -388,7 +389,7 @@ def _merge(base, override):
     merged = {**base, **override}
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
-            merged[key] = {**base[key], **value}
+            merged[key] = override_group(key, base[key], value)
     return merged
 
 

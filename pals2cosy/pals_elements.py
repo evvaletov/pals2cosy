@@ -74,6 +74,15 @@ _GROUP_KEY_PATTERNS = {
     "ElectricMultipoleP": (_ELECTRIC_KEY, _TILT_KEY),
 }
 
+# Components that give the same quantity in different forms, so that one
+# replaces another when a group is inherited and modified.
+_STRENGTH_KEY = re.compile(r"^[BKE](?P<comp>[ns])(?P<order>\d+)L?$")
+_ALTERNATIVE_KEYS = {
+    "BendP": frozenset({"g_ref", "Bn0_ref", "radius_ref"}),
+    "RFP": frozenset({"voltage", "gradient"}),
+    "SolenoidP": frozenset({"Ksol", "Bsol", "Bz"}),
+}
+
 _ZERO_LENGTH_KINDS = ("Marker", "BeginningEle", "Placeholder", "Fiducial", "Fork",
                       "FloorShift")
 _MULTIPOLE_KINDS = frozenset({
@@ -95,6 +104,27 @@ _REF_GEOMETRIES = ("ARC", "CHORD", "ENTRANCE_COORDS", "EXIT_COORDS")
 
 def _warn(message):
     warnings.warn(message, PALSConversionWarning, stacklevel=3)
+
+
+def _quantity(gname, key):
+    if gname in _GROUP_KEY_PATTERNS:
+        m = _STRENGTH_KEY.match(key)
+        return m and (m.group("comp"), int(m.group("order")))
+    alternatives = _ALTERNATIVE_KEYS.get(gname)
+    return alternatives if alternatives and key in alternatives else None
+
+
+def override_group(gname, base, override):
+    """Parameter group ``base`` modified by ``override``.
+
+    A component given in ``override`` replaces any form of the same quantity
+    in ``base``: ``Bn1`` replaces an inherited ``Kn1`` or ``Kn1L``, ``Bsol``
+    an inherited ``Ksol``.
+    """
+    replaced = {_quantity(gname, key) for key in override} - {None}
+    merged = {k: v for k, v in base.items() if _quantity(gname, k) not in replaced}
+    merged.update(override)
+    return merged
 
 
 def is_extension_block(value):
@@ -187,9 +217,9 @@ class ElementContext:
             raise ValueError(
                 f"Element '{name}': cannot resolve {gname} inherit '{target}'")
         base = self._resolve_group(base, gname, name, seen + (target,))
-        merged = {k: v for k, v in base.items() if k not in ("kind", "inherit")}
-        merged.update((k, v) for k, v in group.items() if k != "inherit")
-        return merged
+        return override_group(
+            gname, {k: v for k, v in base.items() if k not in ("kind", "inherit")},
+            {k: v for k, v in group.items() if k != "inherit"})
 
 
 # ---------------------------------------------------------------------------
@@ -426,6 +456,8 @@ def _multipole(ctx, raw, name, kind, length):
         _no_strength(kind, name, "no MagneticMultipoleP")
         return elem
     fields, thin, normalized = result
+    if not fields:
+        _no_strength(kind, name, "no strength in MagneticMultipoleP")
     _store_multipoles(elem, fields, name, kind)
     elem["thin"] = thin
     elem["normalized"] = normalized
@@ -476,10 +508,11 @@ def _bend(ctx, raw, name, kind, length):
         name, angle, bend.get("ref_geometry", "ARC"),
         num("e1"), num("e2"), num("e1_rect"), num("e2_rect"))
 
-    for key in ("edge1_int", "edge2_int"):
-        if num(key, 0.0):
-            _warn(f"Bend '{name}': BendP.{key} is not represented; COSY applies its "
-                  f"own Enge fringe-field model with --fr 1, 2 or 3")
+    edge_int = (num("edge1_int", 0.0), num("edge2_int", 0.0))
+    if min(edge_int) < 0:
+        raise ValueError(
+            f"Bend '{name}': BendP.edge1_int and edge2_int must be non-negative, "
+            f"got {edge_int[0]} and {edge_int[1]}")
 
     mult = read_multipoles(ctx, raw, name, L)
     if mult is not None:
@@ -510,6 +543,7 @@ def _bend(ctx, raw, name, kind, length):
     elem["exit_edge_curvature"] = num("h2", 0.0)
     elem["tilt"] = num("tilt_ref", 0.0)
     elem["pole_gap"] = _pole_gap(ctx, raw, name)
+    elem["edge_int"] = edge_int
     return elem
 
 
@@ -680,11 +714,14 @@ def _wiggler(ctx, raw, name, kind, length):
     if wig is None:
         _no_strength(kind, name, "no WigglerP")
         return elem
-    elem["wiggler_field"] = ctx.optional(wig, "peak_field", name, "WigglerP")
+    field = ctx.optional(wig, "peak_field", name, "WigglerP")
     period = ctx.optional(wig, "period", name, "WigglerP")
     if period is not None and period <= 0:
         raise ValueError(
             f"Element '{name}': field 'WigglerP.period' must be positive, got {period}")
+    if field is None or period is None:
+        _no_strength(kind, name, "WigglerP needs both peak_field and period")
+    elem["wiggler_field"] = field
     elem["wiggler_period"] = period
     return elem
 

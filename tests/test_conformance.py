@@ -11,7 +11,7 @@ import yaml
 import pals2cosy
 from pals2cosy.converter import convert
 from pals2cosy.pals_parser import parse_lattice
-from tests.cosy_harness import requires_cosy, requires_sysca, run_cosy
+from tests.cosy_harness import CosyResult, requires_cosy, requires_sysca, run_cosy
 
 EXAMPLES = os.path.join(os.path.dirname(__file__), "pals_examples")
 
@@ -76,7 +76,8 @@ def test_example_fails_with_documented_reason(rel):
 
 
 @requires_cosy
-@pytest.mark.parametrize("fr", [0, pytest.param(1, marks=requires_sysca), 3])
+@pytest.mark.parametrize("fr", [0, pytest.param(1, marks=requires_sysca),
+                                pytest.param(2, marks=requires_sysca), 3])
 @pytest.mark.parametrize("rel", CONVERTING)
 def test_example_runs_in_cosy(rel, fr, cosy_dir):
     with warnings.catch_warnings():
@@ -85,6 +86,12 @@ def test_example_runs_in_cosy(rel, fr, cosy_dir):
     result = run_cosy(fox, cosy_dir)
     assert not result.errors, result.errors
     assert result.scalars["SPOS"] == pytest.approx(sum(e["length"] for e in elements))
+
+
+def test_harness_reports_compilation_failures():
+    # COSY exits with status 0 when it runs out of code memory.
+    result = CosyResult(" --- BEGINNING COMPILATION\n !!! MEMORY EXHAUSTION, INCREASE LCON\n")
+    assert result.errors == [" !!! MEMORY EXHAUSTION, INCREASE LCON"]
 
 
 @pytest.mark.filterwarnings("ignore::UserWarning")

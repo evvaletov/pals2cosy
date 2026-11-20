@@ -240,6 +240,50 @@ PALS:
     assert [(e["length"], e["bn"][1]) for e in elements] == [(0.2, 1.0), (0.2, 2.0), (0.4, 1.0)]
 
 
+@pytest.mark.parametrize("base, override, expected", [
+    ("Kn1: 0.5", "Bn1: 2.0", 2.0),
+    ("Bn1L: 0.2", "Bn1: 2.0", 2.0),
+    ("Bn1: 2.0, tilt1: 0", "Bn1: 3.0", 3.0),
+])
+def test_inherited_strength_in_another_form(pals_file, base, override, expected):
+    # Any inherited parameter may be modified, also by giving it in another form.
+    text = _doc(f"    - q1: {{kind: Quadrupole, length: 0.1, MagneticMultipoleP: {{{base}}}}}\n",
+                line=f"          - q2: {{inherit: q1, MagneticMultipoleP: {{{override}}}}}\n")
+    _, elements = parse_lattice(pals_file(text))
+    assert elements[0]["bn"] == {1: expected}
+
+
+def test_inherited_solenoid_field_in_another_form(pals_file):
+    text = _doc("    - s1: {kind: Solenoid, length: 0.5, SolenoidP: {Ksol: 0.4}}\n"
+                "    - sp: {kind: SolenoidP, Ksol: 0.4}\n",
+                line="          - s2: {inherit: s1, SolenoidP: {Bsol: 1.5}}\n"
+                     "          - s3: {kind: Solenoid, length: 0.5, "
+                     "SolenoidP: {inherit: sp, Bsol: 2.5}}\n")
+    _, elements = parse_lattice(pals_file(text))
+    assert [e["bz"] for e in elements] == [1.5, 2.5]
+
+
+@pytest.mark.parametrize("line, match", [
+    ("- s: {kind: Sextupole, length: 0.1, MagneticMultipoleP: {tilt2: 0.1}}",
+     "no strength in MagneticMultipoleP"),
+    ("- w: {kind: Wiggler, length: 1.0, WigglerP: {peak_field: 1.0}}",
+     "needs both peak_field and period"),
+    ("- w: {kind: Wiggler, length: 1.0, WigglerP: {period: 0.05}}",
+     "needs both peak_field and period"),
+])
+def test_incomplete_strength_warns(pals_file, line, match):
+    with pytest.warns(UserWarning, match=match):
+        parse_lattice(pals_file(_doc("", line=f"          {line}\n")))
+
+
+def test_deeply_nested_expression_is_one_line_error(pals_file):
+    nested = "(" * 3000 + "1" + ")" * 3000
+    path = pals_file(_doc("", line=f"          - d: {{kind: Drift, length: '{nested}'}}\n"))
+    result = _cli(path)
+    assert result.returncode == 1 and "nested too deeply" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_parameter_group_inherit(pals_file):
     text = _doc("""\
     - ap1: {kind: ApertureP, y_width: 0.03}
@@ -460,6 +504,15 @@ def test_rf_reference_energy_change_without_voltage(pals_file, rfp):
 
 
 # --- Expressions ----------------------------------------------------------------
+
+def test_bend_fringe_field_integrals(pals_file):
+    text = _doc("", line="          - b: {kind: Bend, length: 1.0, BendP: "
+                         "{g_ref: 0.5, edge1_int: 0.01, edge2_int: 0.02}}\n")
+    _, elements = parse_lattice(pals_file(text))
+    assert elements[0]["edge_int"] == (0.01, 0.02)
+    with pytest.raises(ValueError, match="non-negative"):
+        parse_lattice(pals_file(text.replace("0.02", "-0.02")))
+
 
 @pytest.mark.parametrize("radius", ["Inf", "-Inf"])
 def test_inf_radius_is_a_straight_bend(pals_file, radius):

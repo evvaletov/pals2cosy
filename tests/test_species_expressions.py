@@ -85,7 +85,8 @@ def test_expression_values(text, value):
 
 @pytest.mark.parametrize("text", [
     "__import__('os').system('true')", "1 +", "unknown_name", "2 // 3",
-    "sin(", "1 / 0", "[1, 2]",
+    "sin(", "1 / 0", "[1, 2]", "factorial(171)", "factorial(1e8)",
+    "(" * 3000 + "1" + ")" * 3000,
 ])
 def test_expression_errors(text):
     with pytest.raises(ExpressionError):

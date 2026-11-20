@@ -35,8 +35,9 @@ pals2cosy examples/fodo.pals.yaml
 # Write to file with fringe fields
 pals2cosy beamline.pals.yaml -o output.fox --fr 1
 
-# Select a Lattice branch or a BeamLine from the facility
-pals2cosy lattice.pals.yaml --beamline fodo_cell
+# Select a Lattice branch or a BeamLine from the facility (a BeamLine without
+# a BeginningEle needs the reference particle on the command line)
+pals2cosy lattice.pals.yaml --beamline fodo_cell --ke 1000 --particle proton
 
 # Override the reference particle; compute Twiss parameters (periodic lattices)
 pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
@@ -112,7 +113,9 @@ beamline excerpt.
 - **Lattices and lines:** `Lattice` with `branches` (by name, with
   `inherit`, or defined in place), `use` (the last one wins; default is the
   last Lattice), `BeamLine` with in-place definitions, element and line
-  `inherit`, parameter-group `inherit` (named groups and `element>Group`),
+  `inherit`, parameter-group `inherit` (named groups and `element>Group`; an
+  inherited parameter may be modified in another form, such as `Bn1` for
+  `Kn1`),
   `repeat` (a negative repeat reverses the element order without direction
   reversal, so a Bend keeps `e1` on its upstream face), and BeamLine `length`
   (a drift fills the line up to its declared length; a shorter length, which
@@ -151,8 +154,9 @@ of radius `r` (`--quad-aperture / 2`). pals2cosy converts with
 Normalized strengths use the signed reference rigidity
 `Bρ = P0 / q = pc / (c q)` (`BnN = KnN · Bρ`, so the field of a given `KnN`
 changes sign with the charge), and length-integrated strengths are divided by
-the element length. `--quad-aperture` therefore changes only the radius at
-which COSY is told the field, not the gradient.
+the element length. At `--fr 0`, `--quad-aperture` therefore changes only
+the radius at which COSY is told the field, not the gradient; with `--fr` 1–3
+it also sets the extent of the multipole fringe fields, and so the optics.
 
 | PALS | COSYScript | Notes |
 |------|------------|-------|
@@ -183,10 +187,18 @@ through `CB`, which mirrors x, so the face angles of a negative bend are
 emitted as `sign(θ)·e` (a rectangular bend has `e1 = e2 = abs(θ)/2` in COSY for
 either sign). Face curvatures `h1`, `h2` map to the DIL curvature arguments
 (positive is convex in both codes). `tilt_ref` rotates the bend about the
-entrance axis and is emitted as `RA` rotations (degrees) around it. The
-half-gap `d` is half of `ApertureP.y_width` (or `y_max − y_min`). It sets the
-extent of the fringe field; when it is not given and `--fr` is 1–3, the bore
-radius (`--quad-aperture / 2`) is used with a warning.
+entrance axis and is emitted as `RA` rotations (degrees) around it.
+
+The half-gap `d` sets the extent of COSY's fringe field at `--fr` 1–3. It is
+chosen so that COSY's default Enge field has the fringe-field integrals
+`edge1_int`/`edge2_int`: `d = edge_int / 0.3695` (from their mean, with a
+warning, if they differ). Without them, `d` is half of `ApertureP.y_width`
+(or `y_max − y_min`), or else the bore radius (`--quad-aperture / 2`) with a
+warning. At `--fr 0` COSY's bends have hard edges and a nonzero `edge1_int`
+or `edge2_int` warns. In the official IOTA example
+(`tests/pals_examples/iota.pals.yaml`, `edge_int` = 0.0145 m) the bends alone
+give the fractional tunes (0.3002, 0.3029) at `--fr` 1–3 against the
+design (0.300, 0.300), but (0.300, 0.404) at `--fr 0`.
 
 **Solenoids.** COSY INFINITY's `CMS` solenoid always has soft edges,
 `B(s) ∝ tanh(s/D) − tanh((s − L)/D)` with fringe length `D`, while the PALS
@@ -236,9 +248,10 @@ names of earlier releases (`antiproton`, `mu+`, `antimuon`, `pi-`,
 `carbon12`, ...) still work. Every species is set with `RP E M Z`, the
 mass in COSY's atomic mass unit, so that COSY's reference rigidity is the one
 normalized strengths were converted with; COSY's presets (`RPP`, `RPE`,
-`RPMU`, `RPPI`) carry masses that differ by up to 1.5e-6, and they also set
-the spin `G`, which a program that adds spin tracking must then set itself
-(`RPS`). A neutral reference species is an error.
+`RPMU`, `RPPI`) carry masses that differ by up to 1.5e-6. Where the anomalous
+magnetic moment `G` is tabulated (electron, positron, muon, anti-muon,
+proton, anti-proton, deuteron), `RPS 0 G` then sets COSY's `G0`, as the presets do, with spin
+tracking off. A neutral reference species is an error.
 
 ## Unsupported constructs
 
@@ -256,7 +269,7 @@ Constructs that leave the converted branch intact are converted with a
 sequences), `adjustments` (not applied), RELATIVE controllers, `girders` and
 `BodyShiftP` misalignments, `ElectricMultipoleP`, multipoles inside bends,
 bend dipole errors (`Kn0` differing from the reference), `edge1_int`/`edge2_int`
-(COSY uses its own Enge fringe model with `--fr 1–3`), kicks, RF
+at `--fr 0`, kicks, RF
 `multipass_phase` and traveling-wave cavities, element kinds without a COSY
 counterpart (emitted as drifts), multipole fields on elements that do not
 convert them (drifts, instruments, wigglers, markers, solenoids, RF
@@ -320,7 +333,8 @@ the commit in `tests/pals_examples/SPEC_COMMIT`, with a `manifest.yaml`
 listing for every file whether it converts or which documented error it
 raises. The suite checks that the manifest covers every example, that each
 outcome holds, and, when COSY INFINITY is installed, that every converted
-example runs in COSY at `--fr 0`, `1` and `3` with the expected total length.
+example runs in COSY at `--fr 0`, `1`, `2` and `3` with the expected total
+length.
 Further tests compare COSY transfer maps with the PALS definitions (reference
 rigidity, multipole kicks to fifth order, skew and tilted multipoles against
 COSY's own frame rotation, bend direction and tilts, sector and rectangular
@@ -335,6 +349,14 @@ map, wiggler focusing).
   converted.
 - Solenoids are soft-edged; their focusing is weaker than the hard-edge PALS
   solenoid by about `--solenoid-fringe / L`.
+- `--fr` applies to every element. PALS multipoles have no fringe-field
+  parameters, so with `--fr` 1–3 they get COSY's default fringe fields at the
+  bore radius; in the IOTA example these move the fractional tunes from
+  (0.300, 0.303) to (0.270, 0.286).
+- COSY INFINITY 10.2 compiles programs of up to about 5,000 element commands.
+  Beyond that it stops with `!!! MEMORY EXHAUSTION, INCREASE LCON` and still
+  exits with status 0; larger lattices need a COSY build with a larger
+  `LCON`.
 - Enge coefficients: COSY's `FC` accepts at most 6 per fringe field; longer
   lists are truncated with a warning.
 - Flat-format quadrupoles given by current (`±G·I·r`) use an electron sign
@@ -371,5 +393,6 @@ pytest tests/ -v
 
 Tests that run COSY INFINITY are skipped when `/usr/local/bin/cosy` and
 `cosy.fox` are not found (override with `PALS2COSY_COSY_BIN` and
-`PALS2COSY_COSY_LIBRARY`). The `--fr 1` runs also need COSY's `SYSCA.DAT`,
-looked for next to `cosy.fox` or given with `PALS2COSY_COSY_SYSCA`.
+`PALS2COSY_COSY_LIBRARY`). The `--fr 1` and `--fr 2` runs also need COSY's
+`SYSCA.DAT`, looked for next to `cosy.fox` or given with
+`PALS2COSY_COSY_SYSCA`.

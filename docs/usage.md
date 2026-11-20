@@ -15,8 +15,9 @@ pals2cosy beamline.pals.yaml --strict
 # Write to file with fringe fields
 pals2cosy lattice.pals.yaml -o output.fox --ke 40 --fr 1
 
-# Select a specific BeamLine from the facility
-pals2cosy lattice.pals.yaml --beamline fodo_cell --ke 1000
+# Select a specific BeamLine from the facility (one without a BeginningEle
+# needs the reference particle on the command line)
+pals2cosy lattice.pals.yaml --beamline fodo_cell --ke 1000 --particle proton
 
 # Compute Twiss parameters (periodic lattices only)
 pals2cosy lattice.pals.yaml --ke 1000 --particle proton --twiss
@@ -34,7 +35,7 @@ pals2cosy beamline.pals.yaml --dim 2 --order 5 --ke 40
 | `--fr INT` | 0 | Fringe field order (0=none, 1=Enge, 2=symplectic, 3=high-precision Enge) |
 | `--order INT` | 3 | DA computation order |
 | `--dim INT` | 3 (2 with `--twiss`) | Phase-space dimensions (2 or 3) |
-| `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius, also the half-gap of bends without `ApertureP` under `--fr 1`–`3` |
+| `--quad-aperture FLOAT` | 0.027 | Multipole bore diameter (m); pole-tip fields are given at its radius, also the half-gap of bends without `edge1_int`/`edge2_int` or `ApertureP` under `--fr 1`–`3` |
 | `--solenoid-fringe FLOAT` | bore radius | Fringe-field length (m) of COSY's soft-edge solenoid `CMS` |
 | `--particle STR` | from lattice | Reference species (PALS/OpenPMD name or ion such as `#12C+6`) |
 | `--twiss` | off | Append GT Twiss extraction (requires periodic lattice; a 3D map also needs RF) |
@@ -55,7 +56,9 @@ from pals2cosy import convert, parse_pals_lattice
 
 beam_params, elements = parse_pals_lattice(
     "lattice.pals.yaml",
-    beamline_name="fodo_cell",   # optional; also ke_override, particle_override
+    beamline_name="fodo_cell",   # optional
+    ke_override=1000,            # MeV; needed when the line has no BeginningEle
+    particle_override="proton",
 )
 
 fox_code = convert(beam_params, elements, fringe_field_order=1)

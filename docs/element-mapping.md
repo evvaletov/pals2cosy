@@ -96,9 +96,11 @@ length.
 
 - $L$, $\theta$: arc length and bend angle from the BendP two-of-three
   resolution
-- $d$: half gap, `ApertureP.y_width / 2` (or `(y_max − y_min)/2`); with
-  `--fr` 1–3 and no gap given, the bore radius $r$ (with a warning), since
-  the gap sets the extent of COSY's fringe field
+- $d$: half gap, which sets the extent of COSY's fringe field at `--fr` 1–3:
+  $d = \mathrm{edge\_int} / 0.3695$, so that COSY's default Enge field has
+  the PALS fringe-field integral (the mean of `edge1_int` and `edge2_int`, with
+  a warning if they differ); otherwise `ApertureP.y_width / 2` (or
+  `(y_max − y_min)/2`), or the bore radius $r$ with a warning
 - $e_1$, $e_2$: sector face angles (degrees) from `e1`/`e1_rect` per
   `ref_geometry`, multiplied by $\mathrm{sign}(\theta)$ because a negative
   bend is mirrored through `CB`
@@ -118,8 +120,10 @@ FD ;
 ```
 
 FC is not emitted for FR 0 (no fringe) or FR 2 (symplectic scaling).
-`BendP.edge1_int`/`edge2_int` are not mapped to Enge coefficients; COSY uses
-its default fringe model.
+PALS bends use COSY's default Enge coefficients, scaled through $d$ to the
+given `edge1_int`/`edge2_int`; 0.3695 is $\int F(1-F)\,dS$ of that Enge
+function $F$, with $S$ in units of the full gap $2d$. At FR 0 the bend has
+hard edges and a nonzero `edge1_int` or `edge2_int` warns.
 
 ## Wiggler → WI
 

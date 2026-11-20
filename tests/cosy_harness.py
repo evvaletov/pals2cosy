@@ -55,7 +55,7 @@ class CosyResult:
     def __init__(self, stdout, stderr="", returncode=0):
         self.stdout = stdout
         self.errors = [line for line in (stdout + "\n" + stderr).splitlines()
-                       if re.search(r"\*\*\* [A-Z]|\$\$\$|ERROR|forrtl", line)]
+                       if re.search(r"\*\*\* [A-Z]|\$\$\$|!!!|ERROR|forrtl", line)]
         if returncode:
             self.errors.append(f"COSY exited with status {returncode}")
         self.scalars = {}

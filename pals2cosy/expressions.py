@@ -70,6 +70,12 @@ def _sinc(x):
     return 1.0 if x == 0 else math.sin(x) / x
 
 
+def _factorial(n):
+    if n > 170:  # 171! exceeds the floating-point range
+        raise OverflowError(f"factorial of {n} is too large")
+    return float(math.factorial(int(n)))
+
+
 _FUNCTIONS = {
     "sqrt": math.sqrt, "log": math.log, "exp": math.exp,
     "sin": math.sin, "cos": math.cos, "tan": math.tan,
@@ -79,7 +85,7 @@ _FUNCTIONS = {
     "coth": lambda x: 1 / math.tanh(x),
     "asinh": math.asinh, "acosh": math.acosh, "atanh": math.atanh,
     "acoth": lambda x: math.atanh(1 / x),
-    "abs": abs, "factorial": lambda n: float(math.factorial(int(n))),
+    "abs": abs, "factorial": _factorial,
     "int": lambda x: float(math.trunc(x)), "nint": _nint, "sign": _sign,
     "floor": lambda x: float(math.floor(x)), "ceiling": lambda x: float(math.ceil(x)),
     "modulo": _modulo,
@@ -239,7 +245,10 @@ class Scope:
             return float(raw)
         if not isinstance(raw, str):
             raise ExpressionError(f"cannot evaluate {raw!r}")
-        return _Parser(_tokenize(raw), self, raw).parse()
+        try:
+            return _Parser(_tokenize(raw), self, raw).parse()
+        except RecursionError:
+            raise ExpressionError("expression nested too deeply") from None
 
     def evaluate_definition(self, raw):
         """Value of a constant or variable definition: a number or a species name

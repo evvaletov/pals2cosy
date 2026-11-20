@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.1] — 2026-11-20
+
+### Fixed
+- Package metadata: the author e-mail address was wrong; it is now `evv@msu.edu`.
+  No code changes.
+
 ## [0.6.0] — 2026-11-19
 
 Targets the PALS specification at commit `b9d5b355` (13 November 2026),

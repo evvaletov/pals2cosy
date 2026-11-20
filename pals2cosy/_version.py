@@ -1,4 +1,4 @@
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 
 # Commit of github.com/pals-project/pals whose specification this release targets.
 __pals_commit__ = "b9d5b355"
